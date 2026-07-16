@@ -1,4 +1,4 @@
-from copy import deepcopy
+﻿from copy import deepcopy
 import os
 import pickle
 import numpy as np
@@ -137,6 +137,7 @@ class scPert:
                          no_perturb = False,
                          use_deg_sparse = False,
                          deg_sparse_ratio = 0.15,
+                         deg_calibrated_lambda = 0.0,
                         ):
         """
         Initialize the model
@@ -182,7 +183,9 @@ class scPert:
                       "pert_names": self.pert_list,
                        "pert_node_map":self.node_map_pert,
                        "use_deg_sparse": use_deg_sparse,
-                       "deg_sparse_ratio": deg_sparse_ratio
+                       'deg_sparse_ratio': deg_sparse_ratio,
+                       'deg_calibrated_lambda': deg_calibrated_lambda,
+                       'deg_ratio': deg_ratio,
                       }
         
         if self.wandb:
@@ -460,7 +463,9 @@ class scPert:
                                 ctrl = self.ctrl_expression, 
                                 dict_filter = self.dict_filter,
                             model_params=self.model.parameters(),
-                            class_weights_indices=gene_indices)      
+                            class_weights_indices=gene_indices,
+                            deg_calibrated_lambda=self.config.get('deg_calibrated_lambda', 0.0),
+                            deg_ratio=self.config.get('deg_ratio', 0.1))
                 loss.backward()
                 nn.utils.clip_grad_value_(self.model.parameters(), clip_value=1.0)
                 optimizer.step()

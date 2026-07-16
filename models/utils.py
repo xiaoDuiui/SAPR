@@ -337,7 +337,7 @@ def filter_pert_in_go(condition, pert_names):
 
 def loss_fct(pred, y, perts, ctrl=None, direction_lambda=1e-3, dict_filter=None, 
                       l1_lambda=1e-5, cosine_lambda=0.1, focal_gamma=2, class_weights_indices=None,
-                      model_params=None):
+                       model_params=None, deg_calibrated_lambda=0.0, deg_ratio=0.1):
     """
     Improved Loss function for gene perturbation prediction
     Args:
@@ -405,7 +405,24 @@ def loss_fct(pred, y, perts, ctrl=None, direction_lambda=1e-3, dict_filter=None,
         cosine_loss = 1 - cos_similarity(pred_p.view(pred_p.size(0), -1), 
                                          y_p.view(y_p.size(0), -1)).mean()
         losses = losses + cosine_lambda * cosine_loss
-    
+
+        # ================================================================
+        # DEG-Calibrated Loss: 基于 SBB Signal Pillar
+        # 动态识别每个扰动的 DEG (top-k% fold change)，
+        # 只在 DEG 上给予高权重，在非 DEG 上抑制噪声
+        # ================================================================
+        if deg_calibrated_lambda > 0 and p != 'ctrl':
+            fc = torch.abs(y_p - ctrl_p)                      # fold change
+            k = max(1, int(deg_ratio * fc.size(-1)))          # top-k DEGs
+            topk_vals, _ = torch.topk(fc, k, dim=-1)
+            threshold = topk_vals[..., -1:]                    # [batch, 1]
+            deg_mask = (fc >= threshold).float()
+            # DEG: weight=10, non-DEG: weight=0.1 → 信号增强/噪声抑制
+            deg_weights = deg_mask * 10.0 + (1 - deg_mask) * 0.1
+            deg_weights = deg_weights / deg_weights.mean(dim=-1, keepdim=True)
+            deg_mse = torch.mean(deg_weights * (pred_p - y_p) ** 2)
+            losses = losses + deg_calibrated_lambda * deg_mse
+
     # L1 Regularization (if model parameters are provided)
     if model_params is not None and l1_lambda > 0:
         l1_reg = torch.tensor(0., requires_grad=True).to(pred.device)
