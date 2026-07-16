@@ -1,4 +1,4 @@
-import torch
+﻿import torch
 import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
@@ -29,6 +29,40 @@ class MLP(nn.Module):
 
     def forward(self, x):
         return self.network(x)
+
+# ======================================================================
+# DEG-Sparse Cross-Attention: 替代稠密广播 gene_emb + pert_emb_matrix；
+# 每个扰动只激活其 top-k% DEG 基因子集（自适应稀疏图滤波）
+# 启发: SBB (DEG重要性) + PertAdapt (掩码注意力) + OCOO-T (稀疏原理)
+# ======================================================================
+class DEGSparseCrossAttention(nn.Module):
+    def __init__(self, hidden_size, sparsity_ratio=0.15):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.sparsity_ratio = sparsity_ratio
+        self.q_proj = nn.Linear(hidden_size, hidden_size)
+        self.k_proj = nn.Linear(hidden_size, hidden_size)
+        self.v_proj = nn.Linear(hidden_size, hidden_size)
+        self.out_proj = nn.Linear(hidden_size, hidden_size)
+        self.norm = nn.LayerNorm(hidden_size)
+        self.temp = nn.Parameter(torch.ones(1) * (hidden_size ** -0.5))
+
+    def forward(self, gene_emb, pert_emb):
+        B, N, H = gene_emb.shape
+        Q = self.q_proj(gene_emb)
+        K = self.k_proj(pert_emb)
+        V = self.v_proj(pert_emb)
+        attn = torch.bmm(Q, K.transpose(1, 2)) * self.temp
+        k = max(1, int(self.sparsity_ratio * N))
+        topk_vals, _ = torch.topk(attn, k, dim=-1)
+        threshold = topk_vals[..., -1:]
+        sparse_mask = (attn >= threshold).float()
+        sparse_attn = F.softmax(
+            attn * sparse_mask - (1 - sparse_mask) * 1e9, dim=-1
+        )
+        out = torch.bmm(sparse_attn, V)
+        out = self.out_proj(out)
+        return self.norm(gene_emb + out)
 
 class MemoryEfficientMultiheadAttention(nn.Module):
     def __init__(self, d_model, nhead, chunk_size=256):
@@ -193,6 +227,17 @@ class scPert_Model(nn.Module):
         self.pert_emb = nn.Embedding(self.num_perts, self.hidden_size)
         self.control_emb = nn.Parameter(torch.randn(1, self.hidden_size) / np.sqrt(self.hidden_size))
         self.pos_emb = nn.Embedding(self.num_genes, self.hidden_size)    
+        # ================================================================
+        # DEG-Sparse 配置: 从 args 读取，默认关闭
+        # ================================================================
+        self.use_deg_sparse = args.get("use_deg_sparse", False)
+        self.deg_sparse_ratio = args.get("deg_sparse_ratio", 0.15)
+        if self.use_deg_sparse:
+            self.deg_sparse_attn = DEGSparseCrossAttention(
+                hidden_size=self.hidden_size, sparsity_ratio=self.deg_sparse_ratio
+            )
+            logging.info("DEG-Sparse Cross-Attention enabled (ratio=" + str(self.deg_sparse_ratio) + ")")
+
         self.to(self.device)
 
     def get_random_embedding(self, gene_name):
@@ -234,9 +279,9 @@ class scPert_Model(nn.Module):
         gene_emb = gene_emb.repeat(num_graphs, 1)
         gene_emb = self.gene_dense(gene_emb)
 
-        # # ===== 【核心防御：强制原地拦截空 Batch】 =====
+        # # ===== 銆愭牳蹇冮槻寰★細寮哄埗鍘熷湴鎷︽埅绌?Batch銆?=====
         # try:
-        #     # 尝试通过多种方式获取真实的图数量
+        #     # 灏濊瘯閫氳繃澶氱鏂瑰紡鑾峰彇鐪熷疄鐨勫浘鏁伴噺
         #     current_num_graphs = num_graphs if 'num_graphs' in locals() else 0
         #     if hasattr(batch, 'num_graphs'):
         #         current_num_graphs = batch.num_graphs
@@ -245,16 +290,16 @@ class scPert_Model(nn.Module):
         # except:
         #     current_num_graphs = 0
 
-        # # 如果发现任何迹象表明这批数据是空的，或者数量为 0
+        # # 濡傛灉鍙戠幇浠讳綍杩硅薄琛ㄦ槑杩欐壒鏁版嵁鏄┖鐨勶紝鎴栬€呮暟閲忎负 0
         # if current_num_graphs == 0 or (hasattr(batch, 'x') and batch.x.shape[0] == 0):
-        #     # 创造一个伪造的 1 batch 骨架特征，骗过前向传播，让它安全退出而不崩溃
-        #     print("⚠️ 警告：在 forward 内部拦截到空 Batch，正在执行无感知平滑渡劫...")
-        #     # 伪造一个 (1, 5045, 维度) 的张量返回，或者随便返回一个跟输出维度一致的全 0 张量
-        #     # 我们直接根据后续计算需要，返回一个全 0 的预测结果，防止后续计算崩溃
-        #     # 很多单细胞模型的最终输出形状是 (cell数量, 基因数量) 或者是每个图一个向量。
-        #     # 为了最稳妥地不让代码在后续任何一行报错，我们这里直接“不粘锅”：
-        #     # 如果后面有算 loss，我们返回一个需要梯度的 0 向量即可。
-        #     # 不过最优雅的还是直接在这里把 gene_emb 伪造成 1 个 batch 的大小：
+        #     # 鍒涢€犱竴涓吉閫犵殑 1 batch 楠ㄦ灦鐗瑰緛锛岄獥杩囧墠鍚戜紶鎾紝璁╁畠瀹夊叏閫€鍑鸿€屼笉宕╂簝
+        #     print("鈿狅笍 璀﹀憡锛氬湪 forward 鍐呴儴鎷︽埅鍒扮┖ Batch锛屾鍦ㄦ墽琛屾棤鎰熺煡骞虫粦娓″姭...")
+        #     # 浼€犱竴涓?(1, 5045, 缁村害) 鐨勫紶閲忚繑鍥烇紝鎴栬€呴殢渚胯繑鍥炰竴涓窡杈撳嚭缁村害涓€鑷寸殑鍏?0 寮犻噺
+        #     # 鎴戜滑鐩存帴鏍规嵁鍚庣画璁＄畻闇€瑕侊紝杩斿洖涓€涓叏 0 鐨勯娴嬬粨鏋滐紝闃叉鍚庣画璁＄畻宕╂簝
+        #     # 寰堝鍗曠粏鑳炴ā鍨嬬殑鏈€缁堣緭鍑哄舰鐘舵槸 (cell鏁伴噺, 鍩哄洜鏁伴噺) 鎴栬€呮槸姣忎釜鍥句竴涓悜閲忋€?
+        #     # 涓轰簡鏈€绋冲Ε鍦颁笉璁╀唬鐮佸湪鍚庣画浠讳綍涓€琛屾姤閿欙紝鎴戜滑杩欓噷鐩存帴鈥滀笉绮橀攨鈥濓細
+        #     # 濡傛灉鍚庨潰鏈夌畻 loss锛屾垜浠繑鍥炰竴涓渶瑕佹搴︾殑 0 鍚戦噺鍗冲彲銆?
+        #     # 涓嶈繃鏈€浼橀泤鐨勮繕鏄洿鎺ュ湪杩欓噷鎶?gene_emb 浼€犳垚 1 涓?batch 鐨勫ぇ灏忥細
         #     num_graphs = 1 
         # # ============================================
         gene_emb = gene_emb.view(num_graphs, self.num_genes, -1)
@@ -304,9 +349,11 @@ class scPert_Model(nn.Module):
 
 
         pert_emb_matrix = pert_emb_matrix * self.emb_scale
-
-
-        combined_emb = self.layer_norm1(gene_emb + pert_emb_matrix)
+        if self.use_deg_sparse:
+            combined_emb = self.deg_sparse_attn(gene_emb, pert_emb_matrix)
+        else:
+            combined_emb = self.layer_norm1(gene_emb + pert_emb_matrix)
+        combined_emb = self.dropout(combined_emb)
         combined_emb = self.dropout(combined_emb)
 
 
@@ -326,3 +373,4 @@ class scPert_Model(nn.Module):
 
         return torch.stack(output)
     
+

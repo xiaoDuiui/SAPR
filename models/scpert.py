@@ -133,8 +133,10 @@ class scPert:
                          G_go = None,
                          G_go_weight = None,
                          G_coexpress = None,
-                         G_coexpress_weight = None,
-                         no_perturb = False, 
+                        G_coexpress_weight = None,
+                         no_perturb = False,
+                         use_deg_sparse = False,
+                         deg_sparse_ratio = 0.15,
                         ):
         """
         Initialize the model
@@ -177,8 +179,10 @@ class scPert:
                        'num_genes': self.num_genes,
                        'num_perts': self.num_perts,
                        'no_perturb': no_perturb,
-                       "pert_names": self.pert_list,
-                       "pert_node_map":self.node_map_pert
+                      "pert_names": self.pert_list,
+                       "pert_node_map":self.node_map_pert,
+                       "use_deg_sparse": use_deg_sparse,
+                       "deg_sparse_ratio": deg_sparse_ratio
                       }
         
         if self.wandb:
