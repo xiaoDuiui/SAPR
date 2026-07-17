@@ -138,6 +138,7 @@ class scPert:
                          use_deg_sparse = False,
                          deg_sparse_ratio = 0.15,
                          deg_calibrated_lambda = 0.0,
+                         deg_ratio = 0.1,
                         ):
         """
         Initialize the model

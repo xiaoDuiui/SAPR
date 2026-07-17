@@ -52,15 +52,14 @@ class DEGSparseCrossAttention(nn.Module):
         Q = self.q_proj(gene_emb)
         K = self.k_proj(pert_emb)
         V = self.v_proj(pert_emb)
-        attn = torch.bmm(Q, K.transpose(1, 2)) * self.temp
+        # Efficient O(N) element-wise attention per gene
+        attn = (Q * K).sum(dim=-1, keepdim=True) * self.temp
         k = max(1, int(self.sparsity_ratio * N))
-        topk_vals, _ = torch.topk(attn, k, dim=-1)
+        topk_vals, _ = torch.topk(attn.squeeze(-1), k, dim=-1)
         threshold = topk_vals[..., -1:]
-        sparse_mask = (attn >= threshold).float()
-        sparse_attn = F.softmax(
-            attn * sparse_mask - (1 - sparse_mask) * 1e9, dim=-1
-        )
-        out = torch.bmm(sparse_attn, V)
+        sparse_mask = (attn.squeeze(-1) >= threshold).float()
+        gate = torch.sigmoid(attn.squeeze(-1)) * sparse_mask
+        out = V * gate.unsqueeze(-1)
         out = self.out_proj(out)
         return self.norm(gene_emb + out)
 
