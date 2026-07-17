@@ -303,9 +303,19 @@ class scPert_Model(nn.Module):
         # # ============================================
         gene_emb = gene_emb.view(num_graphs, self.num_genes, -1)
 
-        gene_interaction = torch.matmul(gene_emb, gene_emb.transpose(-2, -1)) / (self.hidden_size ** 0.5)
-        gene_interaction = F.softmax(gene_interaction, dim=-1)
-        gene_context = torch.matmul(gene_interaction, gene_emb)
+        # Chunked gene self-attention: peak [B,chunk,N] instead of [B,N,N] (10x less memory)
+        gene_context_parts = []
+        chunk_size = 512
+        n_genes = gene_emb.size(1)
+        scale = self.hidden_size ** 0.5
+        for c_start in range(0, n_genes, chunk_size):
+            c_end = min(c_start + chunk_size, n_genes)
+            q_chunk = gene_emb[:, c_start:c_end, :]
+            attn_chunk = torch.matmul(q_chunk, gene_emb.transpose(-2, -1)) / scale
+            attn_chunk = F.softmax(attn_chunk, dim=-1)
+            gc_chunk = torch.matmul(attn_chunk, gene_emb)
+            gene_context_parts.append(gc_chunk)
+        gene_context = torch.cat(gene_context_parts, dim=1)
         gene_context = self.gene_interaction_layer(gene_context) 
         gene_emb = gene_emb + gene_context
 

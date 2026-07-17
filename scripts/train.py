@@ -23,7 +23,6 @@ pertData.load(DataName=DataName)
 pertData.prepare_split(split='simulation', seed=77)
 pertData.get_dataloader(batch_size=32, test_batch_size=32)
 
-# Embedding alignment
 print('Aligning embeddings via Ensembl ID translation...')
 if hasattr(pertData, 'adata'):
     model_expected_genes = list(pertData.adata.var_names)
@@ -55,13 +54,12 @@ for ens_id in model_expected_genes:
         aligned.append(np.random.normal(0, 0.1, size=(dim,)))
 
 aligned = np.array(aligned)
-print(f'Aligned: {match_count} / {len(model_expected_genes)}, cold-start {len(model_expected_genes) - match_count}')
+print(f'Aligned: {match_count} / {len(model_expected_genes)}, cold-start: {len(model_expected_genes) - match_count}')
 
 embedding_path = os.path.join(embedding_dir, embedding_file)
 np.save(embedding_path, aligned)
 print(f'Embedding saved: {embedding_path}')
 
-# Initialize model with optimized ICASSP innovations
 SCPert = scpert.scPert(pertData, device=device,
                        weight_bias_track=False,
                        proj_name='pertnet',
