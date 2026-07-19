@@ -139,6 +139,7 @@ class scPert:
                          deg_sparse_ratio = 0.15,
                          deg_calibrated_lambda = 0.0,
                          deg_ratio = 0.1,
+                         interaction_lambda = 0.0,
                         ):
         """
         Initialize the model
@@ -187,6 +188,7 @@ class scPert:
                        'deg_sparse_ratio': deg_sparse_ratio,
                        'deg_calibrated_lambda': deg_calibrated_lambda,
                        'deg_ratio': deg_ratio,
+                       'interaction_lambda': interaction_lambda,
                       }
         
         if self.wandb:
@@ -466,7 +468,8 @@ class scPert:
                             model_params=self.model.parameters(),
                             class_weights_indices=gene_indices,
                             deg_calibrated_lambda=self.config.get('deg_calibrated_lambda', 0.0),
-                            deg_ratio=self.config.get('deg_ratio', 0.1))
+                            deg_ratio=self.config.get('deg_ratio', 0.1),
+                            interaction_lambda=self.config.get('interaction_lambda', 0.0))
                 loss.backward()
                 nn.utils.clip_grad_value_(self.model.parameters(), clip_value=1.0)
                 optimizer.step()

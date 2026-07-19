@@ -21,7 +21,7 @@ print(f'\n===== Processing dataset: {DataName} =====\n')
 pertData = ProcePertdata.PertData(data_path)
 pertData.load(DataName=DataName)
 pertData.prepare_split(split='simulation', seed=77)
-pertData.get_dataloader(batch_size=32, test_batch_size=32)
+pertData.get_dataloader(batch_size=4, test_batch_size=4)
 
 print('Aligning embeddings via Ensembl ID translation...')
 if hasattr(pertData, 'adata'):
@@ -69,8 +69,9 @@ SCPert = scpert.scPert(pertData, device=device,
 SCPert.model_initialize(
     hidden_size=64,
     use_deg_sparse=True,
-    deg_sparse_ratio=0.1,
-    deg_calibrated_lambda=0.2,
+    deg_sparse_ratio=0.25,
+    deg_calibrated_lambda=0.0,
+    interaction_lambda=0.05,
     deg_ratio=0.1
 )
 
@@ -79,7 +80,7 @@ SCPert.model.gene_emb = torch.nn.Parameter(
     torch.tensor(aligned, dtype=torch.float32).to(device)
 )
 
-SCPert.train(epochs=15, lr=0.001)
+SCPert.train(epochs=25, lr=0.001)
 SCPert.save_model(f'{DataName}_model_FINAL')
 print(f'\n===== Completed: {DataName} =====\n')
 print('All done!')

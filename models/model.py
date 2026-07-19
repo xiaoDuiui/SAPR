@@ -303,19 +303,25 @@ class scPert_Model(nn.Module):
         # # ============================================
         gene_emb = gene_emb.view(num_graphs, self.num_genes, -1)
 
-        # Chunked gene self-attention: peak [B,chunk,N] instead of [B,N,N] (10x less memory)
-        gene_context_parts = []
+        # Chunked gene self-attention with gradient checkpointing
         chunk_size = 512
         n_genes = gene_emb.size(1)
         scale = self.hidden_size ** 0.5
+
+        def gene_attn_chunk(q_chunk, v, s):
+            a = torch.matmul(q_chunk, v.transpose(-2, -1)) / s
+            a = F.softmax(a, dim=-1)
+            return torch.matmul(a, v)
+
+        chunks = []
         for c_start in range(0, n_genes, chunk_size):
             c_end = min(c_start + chunk_size, n_genes)
             q_chunk = gene_emb[:, c_start:c_end, :]
-            attn_chunk = torch.matmul(q_chunk, gene_emb.transpose(-2, -1)) / scale
-            attn_chunk = F.softmax(attn_chunk, dim=-1)
-            gc_chunk = torch.matmul(attn_chunk, gene_emb)
-            gene_context_parts.append(gc_chunk)
-        gene_context = torch.cat(gene_context_parts, dim=1)
+            gc_chunk = torch.utils.checkpoint.checkpoint(
+                gene_attn_chunk, q_chunk, gene_emb, scale, use_reentrant=False
+            )
+            chunks.append(gc_chunk)
+        gene_context = torch.cat(chunks, dim=1)
         gene_context = self.gene_interaction_layer(gene_context) 
         gene_emb = gene_emb + gene_context
 
@@ -382,4 +388,5 @@ class scPert_Model(nn.Module):
 
         return torch.stack(output)
     
+
 

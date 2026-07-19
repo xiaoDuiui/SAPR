@@ -337,7 +337,7 @@ def filter_pert_in_go(condition, pert_names):
 
 def loss_fct(pred, y, perts, ctrl=None, direction_lambda=1e-3, dict_filter=None, 
                       l1_lambda=1e-5, cosine_lambda=0.1, focal_gamma=2, class_weights_indices=None,
-                       model_params=None, deg_calibrated_lambda=0.0, deg_ratio=0.1):
+                       model_params=None, deg_calibrated_lambda=0.0, deg_ratio=0.1, interaction_lambda=0.0):
     """
     Improved Loss function for gene perturbation prediction
     Args:
