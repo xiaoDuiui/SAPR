@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 350" width="500" height="350">
+  <rect width="500" height="350" fill="white"/>
+  <text x="250" y="25" text-anchor="middle" font-size="14" font-weight="bold">Combinatorial Prediction Performance on Norman Dataset</text>
+  <line x1="60" y1="280" x2="480" y2="280" stroke="black" stroke-width="2"/>
+  <line x1="60" y1="40" x2="60" y2="280" stroke="black" stroke-width="2"/>
+  <text x="20" y="160" text-anchor="middle" font-size="12" transform="rotate(-90,20,160)">Overall MSE</text>
+  <rect x="100" y="93" width="40" height="187" fill="#4C72B0" rx="2"/>
+  <text x="120" y="88" text-anchor="middle" font-size="9" fill="#4C72B0">0.0098</text>
+  <rect x="145" y="135" width="40" height="145" fill="#DD8452" rx="2"/>
+  <text x="165" y="130" text-anchor="middle" font-size="9" fill="#DD8452">0.0076</text>
+  <text x="142" y="295" text-anchor="middle" font-size="11">Overall MSE</text>
+  <rect x="200" y="85" width="40" height="195" fill="#4C72B0" rx="2"/>
+  <text x="220" y="80" text-anchor="middle" font-size="9" fill="#4C72B0">0.0102</text>
+  <rect x="245" y="131" width="40" height="149" fill="#DD8452" rx="2"/>
+  <text x="265" y="126" text-anchor="middle" font-size="9" fill="#DD8452">0.0078</text>
+  <text x="242" y="295" text-anchor="middle" font-size="11">seen0</text>
+  <rect x="300" y="79" width="40" height="201" fill="#4C72B0" rx="2"/>
+  <text x="320" y="74" text-anchor="middle" font-size="9" fill="#4C72B0">0.0105</text>
+  <rect x="345" y="133" width="40" height="147" fill="#DD8452" rx="2"/>
+  <text x="365" y="128" text-anchor="middle" font-size="9" fill="#DD8452">0.0077</text>
+  <text x="342" y="295" text-anchor="middle" font-size="11">seen1</text>
+  <rect x="400" y="129" width="40" height="151" fill="#4C72B0" rx="2"/>
+  <text x="420" y="124" text-anchor="middle" font-size="9" fill="#4C72B0">0.0079</text>
+  <rect x="445" y="144" width="40" height="136" fill="#DD8452" rx="2"/>
+  <text x="465" y="139" text-anchor="middle" font-size="9" fill="#DD8452">0.0071</text>
+  <text x="442" y="295" text-anchor="middle" font-size="11">seen2</text>
+  <rect x="350" y="50" width="15" height="15" fill="#4C72B0"/>
+  <rect x="350" y="75" width="15" height="15" fill="#DD8452"/>
+  <text x="372" y="63" font-size="12">scPert</text>
+  <text x="372" y="88" font-size="12">Ours</text>
+</svg>
