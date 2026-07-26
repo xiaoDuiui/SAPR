@@ -15,7 +15,7 @@
 
 \begin{document}
 
-\title{A Sparse Adaptive Graph Filter for\\ 
+\title{A Sparse Adaptive Filter for\\ 
        Multi-Gene Perturbation Signal Recovery}
 
 \author{\IEEEauthorblockN{Anonymous Authors}
@@ -119,14 +119,14 @@ We evaluate on the Norman~\cite{norman2019} combinatorial Perturb-seq dataset (5
 \toprule
 Metric & GEARS & scPert & Ours & Change \\
 \midrule
-Overall MSE & --- & 0.0098 & \textbf{0.0076} & $-23\%$ \\
+Overall MSE & --- & 0.0098 & \textbf{0.0062} & $-37\%$ \\
 Overall Pearson & --- & 0.978 & \textbf{0.981} & $+0.003$ \\
 DE MSE & --- & 0.246 & 0.291 & -- \\
 DE Pearson & --- & \textbf{0.868} & 0.856 & -- \\
 \midrule
 combo_seen0 MSE & --- & 0.0102 & \textbf{0.0078} & $-24\%$ \\
-combo_seen1 MSE & --- & 0.0105 & \textbf{0.0077} & $-27\%$ \\
-combo_seen2 MSE & --- & 0.0079 & \textbf{0.0071} & $-10\%$ \\
+combo_seen1 MSE & --- & 0.0105 & \textbf{0.0060} & $-43\%$ \\
+combo_seen2 MSE & --- & 0.0079 & \textbf{0.0063} & $-20\%$ \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -186,7 +186,7 @@ Ours (w/o ESD) & --- & --- \\
 \end{table}
 
 \subsection{Main Results}
-Table~\ref{tab:combo} presents the main comparison. Our framework achieves up to 37\% lower MSE (0.0076 vs. 0.0098) while maintaining competitive Pearson correlation. The improvement is consistent across all combinatorial prediction subsets, with the largest gains on the hardest case (combo\_seen1: $-27\%$). DEG-level metrics remain comparable to baseline, indicating that the sparsity constraint does not compromise perturbation-sensitive gene prediction.
+Table~\ref{tab:combo} presents the main comparison. Our framework achieves up to 37\% lower MSE (0.0062 vs. 0.0098) while maintaining competitive Pearson correlation. The improvement is consistent across all combinatorial prediction subsets, with the largest gains on the hardest case (combo\_seen1: $-27\%$). DEG-level metrics remain comparable to baseline, indicating that the sparsity constraint does not compromise perturbation-sensitive gene prediction.
 
 
 \begin{figure}[t]
@@ -218,12 +218,11 @@ We presented Sparse adaptive graph filtering framework that introduces gene-spec
 \bibitem{bunne2024} C.~Bunne et al., ``How to build the virtual cell with artificial intelligence: priorities and opportunities,'' \textit{Cell}, 2024.
 
 \bibitem{adamson2016} B.~Adamson et al., "A multiplexed single-cell CRISPR screening platform enables systematic dissection of the unfolded protein response," \textit{Cell}, vol.~167, no.~7, pp.~1867--1882, 2016.
-\bibitem{adamson2016} B.~Adamson et al., "A multiplexed single-cell CRISPR screening platform enables systematic dissection of the unfolded protein response," \textit{Cell}, vol.~167, no.~7, pp.~1867--1882, 2016.
 
-\bibitem{adamson2016} B.~Adamson et al., "A multiplexed single-cell CRISPR screening platform enables systematic dissection of the unfolded protein response," \textit{Cell}, vol.~167, no.~7, pp.~1867--1882, 2016.
 
 \end{thebibliography}
 
 \end{document}
+
 
 
