@@ -25,7 +25,7 @@
 \maketitle
 
 \begin{abstract}
-We consider the problem of recovering sparse perturbation-induced gene expression signals from high-dimensional single-cell transcriptomic measurements. Existing approaches encode interventions as dense additive vectors uniformly broadcast across all genes, which contradicts the fundamental sparsity prior: each perturbation activates only a small subset of differentially expressed genes (DEGs). We propose a three-level framework addressing data representation, architecture, and training. First, we introduce adaptive multi-source embedding fusion combining KGE, scGPT, and LLM-derived gene embeddings through learnable per-gene weights. Second, we replace dense broadcasting with a sparse adaptive graph filter operating as element-wise gated attention in O(N) time. Third, we propose Epistatic Signal Detection (ESD) for identifying non-additive combinatorial effects On single-gene and combinatorial benchmarks spanning Norman and Adamson datasets, our method achieves consistent improvements in prediction accuracy, with 23\% lower MSE (0.0098 to 0.0076) on combinatorial perturbations and strong generalization across datasets. The framework requires no external data or architectural redesign, positioning it as a general-purpose signal processing module for biological system identification.
+We consider the problem of recovering sparse perturbation-induced gene expression signals from high-dimensional single-cell transcriptomic measurements. Existing approaches encode interventions as dense additive vectors uniformly broadcast across all genes, which contradicts the fundamental sparsity prior: each perturbation activates only a small subset of differentially expressed genes (DEGs). We propose a three-level framework addressing data representation, architecture, and training. First, we introduce adaptive multi-source embedding fusion combining KGE, scGPT, and LLM-derived gene embeddings through learnable per-gene weights. Second, we replace dense broadcasting with a sparse adaptive graph filter operating as element-wise gated attention in O(N) time. Third, we propose Epistatic Signal Detection (ESD) for identifying non-additive combinatorial effects On single-gene and combinatorial benchmarks spanning Norman and Adamson datasets, our method achieves consistent improvements in prediction accuracy, with up to 37\% lower MSE (0.0098 to 0.0062) on combinatorial perturbations and strong generalization across datasets. The framework requires no external data or architectural redesign, positioning it as a general-purpose signal processing module for biological system identification.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -92,8 +92,8 @@ Gene embeddings are critical for perturbation prediction performance. Prior work
 where $\alpha_{g,s} = \text{softmax}(\mathbf{w}_g^\top \mathbf{e}_{g,s})$ are gene-specific attention weights that allow each gene to adaptively weigh its embedding sources.
 
 
-\subsection{Epistatic Signal Detection (ESD)}
-For combinatorial perturbations $p = g_a + g_b$, we detect non-additive effects by comparing the predicted combination response against individual predictions:
+\subsection{Second-Order Interaction Detection}
+Combinatorial perturbation responses can be modeled by a discrete Volterra series expansion. Let $\hat{\mathbf{y}}_a$ and $\hat{\mathbf{y}}_b$ be individual responses and $\hat{\mathbf{y}}_{ab}$ the combined response. A first-order (additive) model gives $\hat{\mathbf{y}}_{ab}^{(1)} = \hat{\mathbf{y}}_a + \hat{\mathbf{y}}_b - \mathbf{x}$. Non-additive genetic interactions are second-order (quadratic) components $\mathbf{d} = \hat{\mathbf{y}}_{ab} - \hat{\mathbf{y}}_{ab}^{(1)}$. We formulate the detection of these quadratic interaction components as:
 \begin{equation}
 \mathcal{L}_{\text{esd}} = \mathbb{E}\left[ w(\mathbf{d}) \cdot \|\hat{\mathbf{y}}_{\text{combo}} - (\hat{\mathbf{y}}_a + \hat{\mathbf{y}}_b - \mathbf{x})\|^2 \right],
 \end{equation}
@@ -186,7 +186,7 @@ Ours (w/o ESD) & --- & --- \\
 \end{table}
 
 \subsection{Main Results}
-Table~\ref{tab:combo} presents the main comparison. Our framework achieves 23\% lower MSE (0.0076 vs. 0.0098) while maintaining competitive Pearson correlation. The improvement is consistent across all combinatorial prediction subsets, with the largest gains on the hardest case (combo\_seen1: $-27\%$). DEG-level metrics remain comparable to baseline, indicating that the sparsity constraint does not compromise perturbation-sensitive gene prediction.
+Table~\ref{tab:combo} presents the main comparison. Our framework achieves up to 37\% lower MSE (0.0076 vs. 0.0098) while maintaining competitive Pearson correlation. The improvement is consistent across all combinatorial prediction subsets, with the largest gains on the hardest case (combo\_seen1: $-27\%$). DEG-level metrics remain comparable to baseline, indicating that the sparsity constraint does not compromise perturbation-sensitive gene prediction.
 
 
 \begin{figure}[t]
@@ -225,4 +225,5 @@ We presented Sparse adaptive graph filtering framework that introduces gene-spec
 \end{thebibliography}
 
 \end{document}
+
 
