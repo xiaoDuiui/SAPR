@@ -1,12 +1,10 @@
-# DEG-Sparse: Gene-Specific Sparse Attention
-# ICASSP 2027 Paper Outline
+# SAPR ICASSP 2027 argument map
 
-## Core Results
-
-| Metric | scPert | Ours | Change |
-|--------|--------|------|--------|
-| MSE | 0.0098 | 0.0076 | -23% |
-| Pearson | 0.978 | 0.981 | +0.003 |
-| seen0 MSE | 0.0102 | 0.0078 | -24% |
-| seen1 MSE | 0.0105 | 0.0077 | -27% |
-| seen2 MSE | 0.0079 | 0.0071 | -10% |
+1. Problem: dense perturbation routing ignores condition-specific response support.
+2. Method: AMF builds the perturbation representation; SAF routes it through a
+   top-ranked support; IAR emphasizes observed non-additive residual genes.
+3. Primary evidence: all-gene MSE improves on every Norman combination category.
+4. Boundary evidence: top-DE Norman and Adamson metrics regress under the fixed
+   support ratio.
+5. Conclusion: sparse routing is useful, but support size must be calibrated and
+   validated with multi-seed paired inference.

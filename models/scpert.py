@@ -139,8 +139,11 @@ class scPert:
                          deg_sparse_ratio = 0.15,
                          deg_calibrated_lambda = 0.0,
                          deg_ratio = 0.1,
-                         interaction_lambda = 0.0,
-                        ):
+                          interaction_lambda = 0.0,
+                          use_adaptive_fusion = False,
+                          kge_embedding_path = None,
+                          scgpt_embedding_path = None,
+                         ):
         """
         Initialize the model
 
@@ -169,6 +172,13 @@ class scPert:
         -------
         None
         """
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        embedding_root = os.path.abspath(os.path.join(repo_root, '..', 'embeddings'))
+        kge_embedding_path = kge_embedding_path or os.path.join(
+            embedding_root, 'gene_2_kge_comgcn_final_common.npz')
+        scgpt_embedding_path = scgpt_embedding_path or os.path.join(
+            embedding_root, 'gene_embeddingss_full_common.npz')
+
         self.config = {'hidden_size': hidden_size,
                       'embedding_size': 512,
                        'num_go_gnn_layers' : num_go_gnn_layers, 
@@ -188,7 +198,10 @@ class scPert:
                        'deg_sparse_ratio': deg_sparse_ratio,
                        'deg_calibrated_lambda': deg_calibrated_lambda,
                        'deg_ratio': deg_ratio,
-                       'interaction_lambda': interaction_lambda,
+                        'interaction_lambda': interaction_lambda,
+                        'use_adaptive_fusion': use_adaptive_fusion,
+                        'kge_embedding_path': kge_embedding_path,
+                        'scgpt_embedding_path': scgpt_embedding_path,
                       }
         
         if self.wandb:
@@ -436,6 +449,19 @@ class scPert:
 
         print_sys('Start Training...')
 
+        interaction_refs = None
+        if self.config.get('interaction_lambda', 0.0) > 0:
+            sums, counts = {}, {}
+            for reference_batch in train_loader:
+                reference_y = reference_batch.y.detach().cpu()
+                for idx, condition in enumerate(reference_batch.pert):
+                    sums[condition] = sums.get(condition, 0) + reference_y[idx]
+                    counts[condition] = counts.get(condition, 0) + 1
+            interaction_refs = {
+                condition: (value / counts[condition]).to(self.device)
+                for condition, value in sums.items()
+            }
+
         for epoch in range(epochs):
             self.model.train()
 
@@ -456,11 +482,6 @@ class scPert:
                     continue
                 # ============================================
 
-                # 原本的第 441 行
-                pred = self.model(batch)
-                
-                pred = self.model(batch)
-
                 pred = self.model(batch)
                 loss= loss_fct(pred, y, perts=batch.pert,
                                 ctrl = self.ctrl_expression, 
@@ -469,17 +490,18 @@ class scPert:
                             class_weights_indices=gene_indices,
                             deg_calibrated_lambda=self.config.get('deg_calibrated_lambda', 0.0),
                             deg_ratio=self.config.get('deg_ratio', 0.1),
-                            interaction_lambda=self.config.get('interaction_lambda', 0.0))
+                            interaction_lambda=self.config.get('interaction_lambda', 0.0),
+                            interaction_refs=interaction_refs)
                 loss.backward()
                 nn.utils.clip_grad_value_(self.model.parameters(), clip_value=1.0)
                 optimizer.step()
+                scheduler.step()
 
 
                 if step % 50 == 0:
                     log = "Epoch {} Step {} Train Loss: {:.4f}" 
                     print_sys(log.format(epoch + 1, step + 1, loss.item()))
 
-            scheduler.step()
             # Evaluate model performance on train and val set
             train_res = evaluate(train_loader, self.model,self.device)
             val_res = evaluate(val_loader, self.model,self.device)
@@ -538,6 +560,7 @@ class scPert:
                                'frac_sigma_below_1_non_dropout',
                                'mse_top20_de_non_dropout']       
 
+        test_subgroup_metrics = {}
         if self.split == 'simulation':
             print_sys("Start doing subgroup analysis for simulation split...")
             subgroup = self.subgroup
@@ -559,6 +582,7 @@ class scPert:
                         self.wandb.log({'test_' + name + '_' + m: subgroup_analysis[name][m]})
 
                     print_sys('test_' + name + '_' + m + ': ' + str(subgroup_analysis[name][m]))
+            test_subgroup_metrics = deepcopy(subgroup_analysis)
 
             ## deeper analysis
             subgroup_analysis = {}
@@ -586,5 +610,10 @@ class scPert:
 
                     print_sys('test_' + name + '_' + m + ': ' + str(subgroup_analysis[name][m]))
         print_sys('Done!')
+        return {
+            'test_metrics': test_metrics,
+            'test_pert_res': test_pert_res,
+            'subgroup_metrics': test_subgroup_metrics,
+        }
 
 

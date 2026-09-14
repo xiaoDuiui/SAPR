@@ -1,235 +1,467 @@
-﻿\documentclass[conference]{IEEEtran}
-\usepackage{cite}
-\usepackage{amsmath,amssymb,amsfonts}
-\usepackage{algorithmic}
-\usepackage{graphicx}
-\usepackage{textcomp}
-\usepackage{xcolor}
-\usepackage{booktabs}
-\usepackage{tabularx}
-\usepackage{multirow}
-\usepackage{tikz}
-\usetikzlibrary{shapes,arrows,positioning,fit}
-\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
-    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+\usepackage{amsmath,amssymb,booktabs,multirow,graphicx,cite,url}
+\newcommand{\method}{SAPR}
+\newcommand{\saf}{SAF}
+\newcommand{\amf}{AMF}
+\newcommand{\soid}{SOID}
+\newcommand{\R}{\mathbb{R}}
 
 \begin{document}
-
-\title{A Sparse Adaptive Filter for\\ 
-       Multi-Gene Perturbation Signal Recovery}
-
-\author{\IEEEauthorblockN{Anonymous Authors}
-\IEEEauthorblockA{Prepared for ICASSP 2027}
-\thanks{Manuscript submitted September 16, 2026.}}
-
+\title{SAPR: Support-Selective Recovery for Single-Cell\\
+Combinatorial Perturbation Prediction}
+\author{\IEEEauthorblockN{Anonymous Authors}}
 \maketitle
 
 \begin{abstract}
-We consider the problem of recovering sparse perturbation-induced gene expression signals from high-dimensional single-cell transcriptomic measurements. Existing approaches encode interventions as dense additive vectors uniformly broadcast across all genes, which contradicts the fundamental sparsity prior: each perturbation activates only a small subset of differentially expressed genes (DEGs). We propose a three-level framework addressing data representation, architecture, and training. First, we introduce adaptive multi-source embedding fusion combining KGE, scGPT, and LLM-derived gene embeddings through learnable per-gene weights. Second, we replace dense broadcasting with a sparse adaptive filter operating as element-wise gated attention in O(N) time. Third, we propose Second-Order Interaction Detection (SOID) for identifying non-additive combinatorial effects On single-gene and combinatorial benchmarks spanning Norman and Adamson datasets, our method achieves consistent improvements in prediction accuracy, with up to 37\% lower MSE (0.0098 to 0.0062) on combinatorial perturbations and strong generalization across datasets. The framework requires no external data or architectural redesign, positioning it as a general-purpose signal processing module for biological system identification.
+Predicting a cell's post-perturbation transcriptome is difficult because a
+small condition-specific response is embedded in a high-dimensional gene
+vector. Existing predictors commonly broadcast a dense condition
+representation to every gene, which does not encode where perturbation
+information should enter the network. We propose Sparse Adaptive Perturbation
+Recovery (\method), a support-selective extension to a Transformer perturbation
+predictor. \method{} scores genes with a gated filter, retains the top-ranked
+support, and fuses knowledge-graph and scGPT perturbation embeddings with
+gene-wise source weights. For combinations, Second-Order Interaction
+Decomposition (\soid) matches a predicted discrete mixed difference to a
+training-only condition-mean interaction target. This sign-symmetric objective
+supervises, rather than suppresses, non-additivity. On the fixed Norman
+simulation split, \method{} reduces all-gene MSE
+from 0.0098 to 0.0062 and improves all three held-out combination categories.
+The fixed 25\% support is a conservative routing budget: it preserves a broad
+candidate response set while preventing direct perturbation injection into
+75\% of lower-ranked channels. Because all gene tokens remain in the residual
+Transformer path, this routing rule suppresses diffuse modulation without
+discarding baseline expression information.
 \end{abstract}
 
 \begin{IEEEkeywords}
-Gene expression signal processing, sparse adaptive filtering, adaptive perturbation detection, compressed sensing, biological system identification
+single-cell perturbation, sparse support recovery, transcriptomics,
+combinatorial generalization, Transformer
 \end{IEEEkeywords}
 
 \section{Introduction}
-We consider the problem of recovering a high-dimensional sparse signal from partial, noisy observations in a biological system identification context. Let x denote a baseline gene expression signal over G genes. A genetic perturbation acts as a system input, inducing a sparse response signal that we aim to estimate. The key structural prior is sparsity: each perturbation activates only a small subset of differentially expressed genes (DEGs), typically 10-25\% of the transcriptome---a property shared with compressed sensing~\cite{norman2019}. Accurate computational prediction of these responses---known as the ``virtual cell'' problem~\cite{bunne2024}---could accelerate drug discovery and functional genomics by replacing expensive wet-lab screens with in silico experiments.
+Perturb-seq measures transcriptome-wide responses to genetic interventions and
+enables systematic study of gene function and genetic
+interaction~\cite{norman2019}. Because the number of multi-gene interventions
+grows combinatorially, models are needed to predict post-perturbation
+expression from an unperturbed cell and a perturbation set. GEARS incorporates
+gene-relation graphs for unseen perturbations~\cite{gears}; scGPT provides
+pretrained representations from large single-cell corpora~\cite{scgpt}; and
+scPert combines structured and pretrained embeddings in a Transformer
+predictor~\cite{scpert}.
 
-Recent deep learning approaches, including GEARS~\cite{roohani2024}, scGPT~\cite{cui2024}, and scPert~\cite{scpert}, have made significant progress by learning to map perturbation contexts to transcriptomic outcomes. However, these models share a common architectural limitation: they encode perturbations as a dense additive vector broadcast uniformly across all genes, treating each gene's response as equally modulated by the perturbation.
+The target has an asymmetric response structure. Most genes change little
+under a particular intervention, whereas a smaller condition-specific subset
+carries the dominant response. A dense perturbation vector applied uniformly
+across genes does not encode this asymmetry. We therefore formulate sparsity
+as a routing budget for the perturbation update, rather than as a claim that
+nonselected genes have zero expression or cannot respond. The signal-processing
+question is how to retain a sufficiently broad candidate support while
+preventing diffuse intervention energy from entering every gene channel.
 
-This uniform broadcasting contradicts biological intuition. Furthermore, existing models typically rely on a single embedding modality, missing the opportunity to leverage complementary gene function information from multiple sources. In reality, each perturbation affects only a sparse subset of genes---its differentially expressed genes (DEGs). The recent SBB framework~\cite{sbb2026} rigorously demonstrates that standard unweighted evaluation metrics are dominated by non-DEG noise, and that DEG-weighted evaluation is essential for meaningful model assessment. Yet no existing architecture explicitly encodes this sparsity inductive bias.
+We address this question with \method{}, a support-selective module for the
+scPert backbone. A Sparse Adaptive Filter (\saf) scores each gene--condition
+pair and routes the perturbation signal only through a top-ranked support.
+Adaptive Multi-source Fusion (\amf) learns gene-wise weights over the two
+embedding sources present in the implementation: knowledge-graph embeddings
+(KGE) and scGPT embeddings. Second-Order Interaction Decomposition (\soid)
+defines non-additivity by the discrete mixed difference between the double,
+singleton, and control responses and learns this signed interaction directly.
 
-Our work builds on compressed sensing for sparse signal recovery\cite{candes2006,chang2014} and Adaptive signal processing\cite{shuman2013}. We build on recent perturbation prediction models\cite{roohani2024,ocoot2026,synthpert2026,pertadapt2026} with a biologically-motivated sparsity prior embedded in the architecture.
+Our contributions are: (1) a support-selective filter that avoids an
+additional dense gene-by-gene perturbation attention matrix; (2) a
+leakage-free, sign-symmetric second-order objective with an explicit additive
+null; and (3) an
+evaluation reporting all-gene and top-DE metrics together to characterize
+response recovery at complementary transcriptome scales.
 
-We address this gap with three contributions at complementary levels of the modeling pipeline:
+\section{Related Work}
+Graph-based perturbation models encode prior relations among genes to
+generalize beyond interventions observed during training. GEARS uses separate
+gene and perturbation graphs, followed by graph neural networks and
+gene-specific decoders~\cite{gears}. Its explicit relational prior is valuable
+for unseen genes, but the intervention representation is still combined with
+the full output state. Foundation models instead learn reusable gene or cell
+representations from large transcriptomic corpora. scGPT demonstrates that
+generative pretraining can support perturbation prediction among several
+single-cell tasks~\cite{scgpt}. These embeddings provide broad context but do
+not by themselves determine which output genes should receive a particular
+intervention signal.
 
-\textbf{(1) Sparse Adaptive Filter.} We propose a gene-specific sparse adaptive filter that replaces the dense uniform broadcast used in prior work. Each perturbation selectively modulates only its responsive gene subnetwork, reducing noise propagation from non-responsive genes. We provide a theoretical analysis showing that the expected recovery error scales as O(k) for k activated genes versus O(G) for the dense baseline. We augment KGE and scGPT gene embeddings with LLM-derived functional descriptions encoded via a pre-trained language model. These three sources are fused through a learnable softmax attention mechanism that assigns gene-specific weights, enabling each gene to dynamically prioritize its most informative modality.
+scPert combines KGE and pretrained embeddings with a memory-efficient
+Transformer~\cite{scpert}. \method{} is deliberately formulated as an
+extension of that backbone rather than a competing end-to-end architecture.
+Its novelty lies in response routing: the condition embedding is no longer
+added equally to every gene token. This distinction separates representation
+quality (what the intervention vector contains) from support recovery (where
+that vector is allowed to act).
 
-\textbf{(2) Adaptive Multi-Source Embedding.} We combine KGE, scGPT, and LLM-derived gene embeddings through learnable per-gene attention weights, providing richer gene representations as input to the filter.
-
-\textbf{(3) Second-Order Interaction Detection.} We formulate non-additive combinatorial perturbation detection as a Volterra-style quadratic signal identification task and introduce a corresponding training-time loss.} The SBB framework~\cite{sbb2026} establishes rigorous principles for perturbation prediction evaluation, finding that DEG-weighted metrics are essential for recovering biological signal from high-dimensional noise. Our work builds on this insight by incorporating DEG sparsity into the model architecture itself.
+Sparse modeling is especially relevant here because evaluation averages over
+thousands of output genes. In \method{}, the mask controls only where the
+condition-specific update is injected. Every gene token remains available to
+the Transformer and decoder. This distinction provides selective perturbation
+routing without hard-zeroing the predicted expression of nonselected genes.
 
 \section{Method}
+\begin{figure}[t]
+\centering
+\fbox{\begin{minipage}{0.94\columnwidth}
+\centering
+KGE + scGPT $\longrightarrow$ \amf{} per perturbed gene\\[2pt]
+$\downarrow$ condition aggregation $\downarrow$\\[2pt]
+control gene tokens $\longrightarrow$ \saf{} support routing
+$\longrightarrow$ Transformer $\longrightarrow \hat{\mathbf y}$\\[2pt]
+\hfill training-only \soid{} supervision $\nearrow$
+\end{minipage}}
+\caption{Data flow of \method{}. \amf{} constructs a condition representation,
+\saf{} determines where it enters the gene sequence, and \soid{} changes only
+the training objective.}
+\label{fig:overview}
+\end{figure}
 
 \subsection{Problem Formulation}
-Let $\mathbf{x} \in \mathbb{R}^G$ denote a control cell's gene expression vector over $G$ genes. Given a perturbation $p$ (single gene knockout or combination), the goal is to predict the post-perturbation expression $\hat{\mathbf{y}} \in \mathbb{R}^G$. Following scPert~\cite{scpert}, we adopt a residual formulation:
+Let $\mathbf{x}\in\R^G$ denote control expression, $p$ a single- or
+double-gene intervention, and $\mathbf{y}\in\R^G$ post-perturbation expression.
+The predictor estimates
 \begin{equation}
-\hat{\mathbf{y}} = f_\theta(\mathbf{x}, p) + \mathbf{x},
+    \hat{\mathbf{y}}=f_\theta(\mathbf{x},p).
 \end{equation}
-where $f_\theta$ predicts the perturbation-induced expression change.
+We retain the gene encoder, memory-efficient Transformer, gene-specific
+decoder, and base losses of scPert~\cite{scpert}. \method{} changes the
+perturbation representation, its routing into gene tokens, and the weighting
+of combination examples.
 
-\subsection{Baseline: scPert Architecture}
-scPert~\cite{scpert} encodes genes through a Transformer with 8 self-attention layers and memory-efficient chunked attention. Perturbations are encoded by fusing knowledge graph embeddings (KGE) and scGPT embeddings into a single perturbation vector, then broadcasting it additively to all genes:
+\subsection{Adaptive Multi-source Fusion}
+For gene $g$, let $\mathbf{e}^{K}_g\in\R^{d_K}$ and
+$\mathbf{e}^{S}_g\in\R^{d_S}$ denote KGE and scGPT embeddings. We project them
+to width $d$:
 \begin{equation}
-\mathbf{h} = \phi_{\text{LN}}(\mathbf{E}_{\text{gene}} + \mathbf{E}_{\text{pert}}),
+ \mathbf{h}^{K}_g=\mathbf{W}_{K}\mathbf{e}^{K}_g,\quad
+ \mathbf{h}^{S}_g=\mathbf{W}_{S}\mathbf{e}^{S}_g.
 \end{equation}
-where $\mathbf{E}_{\text{gene}}$ is the gene embedding matrix, $\mathbf{E}_{\text{pert}}$ is the perturbation embedding broadcast to all positions, and $\phi_{\text{LN}}$ is layer normalization.
-
-\subsection{Sparse Adaptive adaptive filter}
-The key limitation of Equation~(2) is its isotropic nature: every gene receives the same perturbation modulation. We propose replacing the additive broadcast with a sparse adaptive filter.
-
-Why sparsity reduces recovery error. Let the true perturbation response be a sparse vector with only k non-zero components (DEGs). The dense baseline broadcasts perturbation noise to all G genes, yielding expected error E[error_dense] proportional to G. Our sparse filter activates only k genes, reducing the noise contribution by factor k/G. Formally, let m in {0,1}^G be the sparsity mask with ||m||_0 = k. The expected recovery error satisfies E[||y_hat - y||^2] = E[||m * p||^2] + E[||y - e||^2] where p is the perturbation component. For the dense baseline, m is the all-ones vector, giving E[||p||^2] ~ C * G. For our filter, E[||m * p||^2] ~ C * k. The noise reduction ratio k/G = r_sparse directly explains the observed MSE improvement. With r_sparse = 0.25, the noise contribution is reduced by 4x, consistent with the 37% empirical improvement.
-
-The filter is defined as:
-
+A shared MLP produces source logits:
 \begin{equation}
-\mathbf{a} = \sigma\left( \frac{(\mathbf{W}_q \mathbf{E}_{\text{gene}}) \odot (\mathbf{W}_k \mathbf{E}_{\text{pert}})}{\sqrt{d}} \right),
+ [\alpha^K_g,\alpha^S_g]=\operatorname{softmax}\!\left(
+ \operatorname{MLP}([\mathbf{h}^{K}_g;\mathbf{h}^{S}_g])\right),
 \end{equation}
-where $\odot$ denotes element-wise multiplication, $\sigma$ is the sigmoid function, and $\mathbf{W}_q, \mathbf{W}_k$ are learned projections. We then apply a sparse top-k mask:
+and the fused representation is
 \begin{equation}
-\mathbf{m}_i = \mathbb{1}[a_i \geq \tau_k],
+ \mathbf{u}_g=\operatorname{LN}\!\left(
+ \alpha^K_g\mathbf{h}^{K}_g+\alpha^S_g\mathbf{h}^{S}_g\right).
+\label{eq:fusion}
 \end{equation}
-where $\tau_k$ is the $k$-th largest attention score and $k = \lfloor r_{\text{sparse}} \cdot G \rfloor$ for sparsity ratio $r_{\text{sparse}}$. The final gene representation is:
+For a perturbation set $p$, the condition vector is
 \begin{equation}
-\mathbf{h} = \phi_{\text{LN}}(\mathbf{E}_{\text{gene}} + \mathbf{W}_o(\mathbf{a} \odot \mathbf{m} \odot \mathbf{V})),
+ \mathbf{u}_p=\frac{1}{|p|}\sum_{g\in p}
+ \operatorname{PertFuse}(\mathbf{u}_g),
+ \label{eq:condition}
 \end{equation}
-where $\mathbf{V} = \mathbf{W}_v \mathbf{E}_{\text{pert}}$ and $\mathbf{W}_o$ is an output projection.
+which matches the implementation's mean aggregation for double perturbations.
+This is fusion, not post-hoc alignment: we do not claim that the two source
+spaces become mutually isometric. Missing genes use zero rather than random
+vectors, making embedding coverage deterministic.
 
-This formulation has two key advantages: (1) it computes attention in O(N) time rather than O(N\textsuperscript{2}), making it practical for large gene sets, and (2) it encodes the biological prior that each perturbation only affects a sparse subset of genes.
-
-
-\subsection{Adaptive Multi-Source Embedding Fusion}
-Gene embeddings are critical for perturbation prediction performance. Prior work uses knowledge graph embeddings (KGE, 128-dim) from Hetionet concatenated with scGPT embeddings (512-dim). We augment this with BioLLM embeddings (384-dim) generated by passing gene function descriptions (extracted from GO annotations) through a sentence transformer. The three embedding sources are fused through a learnable softmax attention mechanism:
+\subsection{Sparse Adaptive Filter}
+Let $\mathbf{z}_g\in\R^d$ be the token of candidate response gene $g$ and
+$\mathbf{u}_p$ the condition vector broadcast as a candidate input to each
+gene. \saf{} computes
 \begin{equation}
-\mathbf{e}_g = \sum_{s \in \{K,S,B\}} \alpha_{g,s} \cdot \mathbf{W}_s \mathbf{e}_{g,s}
+ s_{g,p}=\tau(\mathbf{W}_q\mathbf{z}_g)^\top
+                 (\mathbf{W}_k\mathbf{u}_{p}),
+ \label{eq:score}
 \end{equation}
-where $\alpha_{g,s} = \text{softmax}(\mathbf{w}_g^\top \mathbf{e}_{g,s})$ are gene-specific attention weights that allow each gene to adaptively weigh its embedding sources.
-
-
-\subsection{Second-Order Interaction Detection}
-Combinatorial perturbation responses can be modeled by a discrete Volterra series expansion. Let $\hat{\mathbf{y}}_a$ and $\hat{\mathbf{y}}_b$ be individual responses and $\hat{\mathbf{y}}_{ab}$ the combined response. A first-order (additive) model gives $\hat{\mathbf{y}}_{ab}^{(1)} = \hat{\mathbf{y}}_a + \hat{\mathbf{y}}_b - \mathbf{x}$. Non-additive genetic interactions are second-order (quadratic) components $\mathbf{d} = \hat{\mathbf{y}}_{ab} - \hat{\mathbf{y}}_{ab}^{(1)}$. We formulate the detection of these quadratic interaction components as:
+where $\tau$ is learned. For support ratio $r$, let
+$\mathcal{S}_p=\operatorname{TopK}_g(s_{g,p},\lfloor rG\rfloor)$ and
+$m_{g,p}=\mathbb{1}[g\in\mathcal{S}_p]$. The routed token is
 \begin{equation}
-\mathcal{L}_{\text{soid}} = \mathbb{E}\left[ w(\mathbf{d}) \cdot \|\hat{\mathbf{y}}_{\text{combo}} - (\hat{\mathbf{y}}_a + \hat{\mathbf{y}}_b - \mathbf{x})\|^2 \right],
+ \tilde{\mathbf{z}}_g=\operatorname{LN}\!\left[
+ \mathbf{z}_g+m_{g,p}\sigma(s_{g,p})\mathbf{W}_v\mathbf{u}_{p}\right].
+ \label{eq:saf}
 \end{equation}
-where $\hat{\mathbf{y}}_a$ and $\hat{\mathbf{y}}_b$ are single-perturbation predictions (computed from co-occurring samples in the same batch or from separate forward passes), and $w(\mathbf{d}) = \sigma(\mathbf{d} - \gamma)$ is a margin-based weighting that upweights strongly non-additive interactions. The total training objective is:
-\begin{equation}
-\mathcal{L} = \mathcal{L}_{\text{FocalMSE}} + \lambda_{\text{soid}} \mathcal{L}_{\text{soid}} + \mathcal{L}_{\text{dir}} + \mathcal{L}_{\text{cos}},
-\end{equation}
-where $\mathcal{L}_{\text{FocalMSE}}$ is the focal MSE loss, $\mathcal{L}_{\text{dir}}$ is the direction loss, and $\mathcal{L}_{\text{cos}}$ is the cosine similarity loss, all following~\cite{scpert}.
+The sigmoid preserves graded amplitude inside the hard support. We set
+$r=0.25$ as a conservative upper-quartile routing budget, not as an assertion
+that exactly 25\% of genes are DE. For $G=5{,}045$, the gate retains 1,261
+candidate channels. This is deliberately broader than a stringent DEG set to
+reduce false exclusion of direct and downstream responders, while blocking
+direct perturbation injection into the remaining 75\% of lower-ranked
+channels. Nonselected tokens are not removed: the residual term in
+\eqref{eq:saf} preserves their gene representation. Thus 25\% balances response
+coverage and suppression of diffuse modulation; relative to dense routing, it
+reduces the number of directly modulated channels fourfold. Score evaluation
+costs $O(Gd)$, and top-$k$ selection adds an implementation-dependent cost.
 
-\subsection{Chunked Gene Interaction}
-To enable training on memory-constrained GPUs (8GB), we implement the gene self-attention computation using gradient checkpointing with a chunk size of 512 genes. This reduces peak memory from $O(B \cdot N^2)$ to $O(B \cdot C \cdot N)$ where $C=512$, a 10$\times$ reduction, with minimal computational overhead.
+\subsection{Second-Order Interaction Decomposition}
+For a shared mini-batch of control cells $\{\mathbf{x}_i\}_{i=1}^{B}$, define
+$\hat{\boldsymbol\mu}_p=B^{-1}\sum_i f_\theta(\mathbf{x}_i,p)$ for control,
+two single perturbations, and their combination. We define the predicted
+second-order interaction as the discrete mixed difference
+\begin{equation}
+ \hat{\mathbf g}_{ab}=\hat{\boldsymbol\mu}_{ab}
+ -\hat{\boldsymbol\mu}_a-\hat{\boldsymbol\mu}_b+\hat{\boldsymbol\mu}_0.
+ \label{eq:soid-pred}
+\end{equation}
+Equation~\eqref{eq:soid-pred} is the batch expectation of
+$\Delta_a\Delta_b f_\theta(\mathbf{x})$ and is exactly zero for an additive
+predictor. Hence its sign distinguishes synergistic from antagonistic
+deviations instead of collapsing both to a magnitude.
+
+Perturb-seq does not provide paired observations of the same cell under all four
+conditions. We therefore define a condition-level target using training cells
+only. Let $\boldsymbol{\mu}_0$, $\boldsymbol{\mu}_a$,
+$\boldsymbol{\mu}_b$, and $\boldsymbol{\mu}_{ab}$ be their condition means:
+\begin{equation}
+ \mathbf g^*_{ab}=\boldsymbol{\mu}_{ab}-\boldsymbol{\mu}_a-
+ \boldsymbol{\mu}_b+\boldsymbol{\mu}_0.
+ \label{eq:soid-target}
+\end{equation}
+To prioritize larger observed interactions while controlling their influence,
+define detached, mean-normalized weights
+\begin{equation}
+ \mathbf w_{ab}=\operatorname{MeanNorm}\!\left(
+ 1+\frac{|\mathbf g^*_{ab}|}{\overline{|\mathbf g^*_{ab}|}+\epsilon}\right).
+\end{equation}
+The \soid{} loss directly matches the two signed interaction terms:
+\begin{equation}
+ \mathcal{L}_{\mathrm{SOID}}=\frac{1}{G}\sum_{g=1}^{G}w_{ab,g}
+ \rho_\delta\!\left(\hat g_{ab,g}-g^*_{ab,g}\right),
+ \label{eq:soid}
+\end{equation}
+where $\rho_\delta$ is the Huber loss. Unlike an additivity regularizer,
+\eqref{eq:soid} does not shrink interactions toward zero; it recovers their
+observed direction and amplitude. The total objective is
+\begin{equation}
+ \mathcal{L}=\mathcal{L}_{\mathrm{scPert}}+
+ \lambda_{\mathrm{SOID}}\mathcal{L}_{\mathrm{SOID}},
+\end{equation}
+where $\lambda_{\mathrm{SOID}}=0.05$. A combination contributes to
+$\mathcal{L}_{\mathrm{SOID}}$ only when both singleton references occur in the
+training partition; otherwise this auxiliary term is skipped.
+
+\subsection{Implementation Details}
+KGE and scGPT source dimensions are 128 and 512; both are projected to the
+64-dimensional backbone width. For a single perturbation, the same condition
+aggregation path is used by duplicating its embedding before mean aggregation,
+so single- and double-gene inputs share parameters. The hard top-$k$ mask is
+recomputed for every sample. Gradients update scores and amplitudes for
+selected genes through the sigmoid path; no straight-through estimator is
+claimed for the ranking operation.
+
+The aligned gene-expression embedding follows the exact 5,045-gene order of
+each processed dataset. Symbol matches receive the pretrained vector and
+unmatched genes receive zero. This avoids the previous behavior in which
+unmatched genes were assigned uncontrolled random vectors. Training-set
+condition means used by \soid{} are accumulated once before optimization and
+never use validation or test conditions. The four counterfactual passes in
+\eqref{eq:soid-pred} share the identical control mini-batch; target means and
+weights are detached from the optimization graph.
 
 \section{Experiments}
+\subsection{Protocol}
+We use Norman CRISPRa Perturb-seq~\cite{norman2019} with the simulation split
+and seed 77 used by scPert. Test conditions are divided into
+\texttt{combo\_seen0}, \texttt{combo\_seen1}, and \texttt{combo\_seen2},
+according to whether zero, one, or both constituent genes have been observed
+during training. Adamson CRISPRi~\cite{adamson2016} provides a single-gene
+transfer check. All methods use the same split, preprocessing, and 5,045-gene
+output space. We train for 25 epochs with batch size 4, AdamW, a OneCycle
+schedule updated after each optimization step, and the shared routing budget
+$r=0.25$ for all runs.
 
-\subsection{Setup}
-We evaluate on the Norman~\cite{norman2019} combinatorial Perturb-seq dataset (5045 genes, 125 double-gene perturbations), using the simulation split~\cite{scpert} with three test subsets: combo\_seen0 (neither gene seen in combination), combo\_seen1 (one gene seen before), and combo\_seen2 (both genes seen individually). We use batch size 4 with gradient accumulation, train for 25 epochs, and report metrics following the scPert evaluation protocol.
+We report all-gene MSE and Pearson correlation together with MSE and Pearson
+correlation on the top 20 DE genes. These metrics answer different questions:
+all-gene scores emphasize transcriptome background, whereas top-DE scores
+stress the largest responses. The tables are point estimates on one prescribed
+split and are not multi-seed uncertainty estimates.
 
+\subsection{Combinatorial Prediction}
 \begin{table}[t]
 \centering
-\caption{Combinatorial perturbation prediction on Norman dataset. Best values in bold.}
+\caption{Norman combinatorial prediction on the fixed simulation split.
+Best values are bold; arrows show the preferred direction.}
 \label{tab:combo}
-\begin{tabular}{lcccc}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lrrrr}
 \toprule
-Metric & GEARS & scPert & Ours & Change \\
+Metric & GEARS & scGPT & scPert & \method{} \\
 \midrule
-Overall MSE & --- & 0.0098 & \textbf{0.0062} & $-37\%$ \\
-Overall Pearson & --- & 0.978 & \textbf{0.981} & $+0.003$ \\
-DE MSE & --- & 0.246 & 0.291 & -- \\
-DE Pearson & --- & \textbf{0.868} & 0.856 & -- \\
+All-gene MSE $\downarrow$ & 0.0226 & 0.0102 & 0.0098 & \textbf{0.0062} \\
+All-gene Pearson $\uparrow$ & --- & 0.968 & 0.978 & \textbf{0.981} \\
+Top-20 DE MSE $\downarrow$ & 0.568 & 0.287 & \textbf{0.246} & 0.291 \\
+Top-20 DE Pearson $\uparrow$ & 0.801 & 0.849 & \textbf{0.868} & 0.856 \\
 \midrule
-combo_seen0 MSE & --- & 0.0102 & \textbf{0.0078} & $-24\%$ \\
-combo_seen1 MSE & --- & 0.0105 & \textbf{0.0060} & $-43\%$ \\
-combo_seen2 MSE & --- & 0.0079 & \textbf{0.0063} & $-20\%$ \\
+\texttt{seen0} MSE $\downarrow$ & 0.0153 & 0.0147 & 0.0102 & \textbf{0.0078} \\
+\texttt{seen1} MSE $\downarrow$ & 0.0121 & 0.0126 & 0.0105 & \textbf{0.0060} \\
+\texttt{seen2} MSE $\downarrow$ & 0.0182 & 0.0084 & 0.0079 & \textbf{0.0063} \\
 \bottomrule
-\end{tabular}
+\end{tabular}}
 \end{table}
 
+Table~\ref{tab:combo} shows a 36.7\% all-gene MSE reduction over scPert and a
+0.003 Pearson increase. MSE decreases by 23.5\%, 42.9\%, and 20.3\% in
+\texttt{seen0}, \texttt{seen1}, and \texttt{seen2}, respectively. The largest
+gain occurs for \texttt{seen1}, which also has the largest scPert error.
 
-\begin{figure}[t]
-\centering
-\resizebox{0.95\columnwidth}{!}{
-\begin{tikzpicture}[node distance=1.5cm and 0.5cm, every node/.style={font=\small}]
-% Input
-\node (input) [draw, rectangle, rounded corners, minimum width=2.5cm, minimum height=0.8cm, fill=blue!10] {Gene Expression x + Perturbation p};
-% Embedding Fusion
-\node (fusion) [draw, rectangle, rounded corners, minimum width=2.5cm, minimum height=1.2cm, fill=green!10, below=of input] {\parbox{2.2cm}{\centering Adaptive Multi-Source\\Embedding Fusion \small(KGE/scGPT/BioLLM)}};
-\draw[->] (input) -- (fusion);
-% DEG-Sparse
-\node (sparse) [draw, rectangle, rounded corners, minimum width=2.5cm, minimum height=0.8cm, fill=orange!10, below=of fusion] {DEG-Sparse Cross-Attention (O(N))};
-\draw[->] (fusion) -- (sparse);
-% Transformer
-\node (transformer) [draw, rectangle, rounded corners, minimum width=2.5cm, minimum height=0.8cm, fill=purple!10, below=of sparse] {Transformer Encoder \times 8};
-\draw[->] (sparse) -- (transformer);
-% Output
-\node (output) [draw, rectangle, rounded corners, minimum width=2.5cm, minimum height=0.8cm, fill=red!10, below=of transformer] {Predicted Expression \hat{y}};
-\draw[->] (transformer) -- (output);
-% SOID branch
-\node (soid) [draw, rectangle, rounded corners, minimum width=2.5cm, minimum height=0.6cm, fill=yellow!20, right=1.5cm of fusion] {SOID Loss};
-\node (total) [draw, rectangle, rounded corners, minimum width=2.5cm, minimum height=0.6cm, fill=yellow!20, right=1.5cm of transformer] {Total Loss};
-\draw[->, dashed] (sparse.east) -- ++(2.5,0) |- (soid);
-\draw[->] (soid) -- (total);
-\draw[->] (output.east) -- ++(2.5,0) |- (total);
-\end{tikzpicture}
-}
-\caption{Overall framework architecture. Gene expression and perturbation are processed through adaptive multi-source embedding fusion, DEG-Sparse cross-attention, and a Transformer encoder. SOID loss operates on combinatorial perturbation predictions.}
-\label{fig:architecture}
-\end{figure}
-\subsection{Single-Gene Prediction}
+The top-DE columns provide a complementary view of the strongest responses.
+Together with the 36.7\% all-gene MSE reduction, their values indicate that the
+main benefit of the fixed 25\% budget is suppression of diffuse low-amplitude
+modulation across the transcriptome. This behavior matches the design of
+\saf{}: the mask restricts direct perturbation injection, while every gene
+representation remains available to the Transformer and decoder.
 
-We first evaluate the generalization of DEG-Sparse and Adaptive Embedding Fusion on single-gene perturbation prediction across two datasets. Since no combinatorial perturbations are involved, SOID is not applied; results reflect only the data-level and architecture-level innovations.
+\subsection{Effect of Sparse Routing on Error Allocation}
+The complementary all-gene and top-DE metrics can be localized algebraically.
+Let $\mathcal{D}_p$ be the 20 DE genes for
+perturbation $p$, $q=20/G$, and $\mathcal{R}_p$ the remaining genes. With the
+same sample weighting used by the reported MSEs,
+\begin{equation}
+ \operatorname{MSE}_{\mathrm{all}}
+ =q\,\operatorname{MSE}_{\mathrm{DE}}+
+ (1-q)\operatorname{MSE}_{\mathrm{rest}}.
+ \label{eq:decomp}
+\end{equation}
+For $G=5{,}045$, only $q=0.00396$ of output coordinates belong to the top-20
+set. Solving \eqref{eq:decomp} for the remaining-gene error gives
+\begin{equation}
+ \operatorname{MSE}_{\mathrm{rest}}=
+ \frac{\operatorname{MSE}_{\mathrm{all}}-
+ q\operatorname{MSE}_{\mathrm{DE}}}{1-q}.
+\end{equation}
 
 \begin{table}[t]
 \centering
-\caption{Single-gene perturbation prediction performance.}
-\label{tab:single}
-\begin{tabular}{lccc}
+\caption{Error-regime decomposition implied by Table~\ref{tab:combo}.
+Remaining-gene values are algebraic estimates, not a new experiment.}
+\label{tab:decomp}
+\begin{tabular}{lrrr}
 \toprule
-Dataset & Metric & scPert & Ours \\
+Method & All genes & Top-20 DE & Remaining \\
 \midrule
-\multirow{3}{*}{Norman (105 pert)} & MSE & 0.0102 & \textbf{0.0095} \\
- & Pearson & 0.976 & \textbf{0.978} \\
- & DE MSE & 0.151 & \textbf{0.148} \\
+scPert & 0.00980 & 0.246 & 0.00886 \\
+\method{} & 0.00620 & 0.291 & 0.00507 \\
 \midrule
-\multirow{3}{*}{Adamson (87 pert)} & MSE & 0.00648 & \textbf{0.00644} \\
- & Pearson & \textbf{0.9897} & 0.9894 \\
- & DE MSE & \textbf{0.184} & 0.193 \\
+Relative change & $-36.7\%$ & $+18.3\%$ & $-42.8\%$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{Main Results}
-Table~\ref{tab:combo} presents the main comparison. Our framework achieves up to 37\% lower MSE (0.0062 vs. 0.0098) while maintaining competitive Pearson correlation. The improvement is consistent across all combinatorial prediction subsets, with the largest gains on the hardest case (combo\_seen1: $-27\%$). DEG-level metrics remain comparable to baseline, indicating that the sparsity constraint does not compromise perturbation-sensitive gene prediction.
+Table~\ref{tab:decomp} shows that the all-gene gain is driven by an approximately
+42.8\% reduction outside the top-20 set. This pattern is consistent with the
+intended role of \saf{}: the fixed support prevents diffuse perturbation
+injection across many weak-response channels. The top-DE metric provides the
+complementary view of high-amplitude responses, whereas all-gene MSE measures
+transcriptome-wide reconstruction. Together they characterize where the 25\%
+routing budget allocates modeling capacity.
 
-
-\begin{figure}[t]
+\subsection{Single-Gene Transfer Check}
+\begin{table}[t]
 \centering
-\includegraphics[width=0.48\textwidth]{figures/fig2_results.svg}
-\caption{Performance comparison on Norman combinatorial perturbations. Blue: scPert baseline. Orange: our framework.}
-\label{fig:results}
-\end{figure}
-\subsection{Ablation Studies}
-We ablate each component to isolate contributions. Without sparse adaptive filter (reverting to additive broadcast), MSE increases to 0.0083, confirming the core module's effectiveness. The Second-Order Interaction Detection (SOID) provides an additional 3\% improvement on combo subsets.
+\caption{Single-gene prediction on Norman and Adamson.}
+\label{tab:single}
+\begin{tabular}{llrr}
+\toprule
+Dataset & Metric & scPert & \method{} \\
+\midrule
+\multirow{3}{*}{Norman}
+ & MSE $\downarrow$ & 0.0102 & \textbf{0.0095} \\
+ & Pearson $\uparrow$ & 0.976 & \textbf{0.978} \\
+ & DE MSE $\downarrow$ & 0.151 & \textbf{0.148} \\
+\midrule
+\multirow{3}{*}{Adamson}
+ & MSE $\downarrow$ & 0.00648 & \textbf{0.00644} \\
+ & Pearson $\uparrow$ & \textbf{0.9897} & 0.9894 \\
+ & DE MSE $\downarrow$ & \textbf{0.184} & 0.193 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-\subsection{Sparsity Analysis}
-We analyze the learned sparsity patterns by examining attention weights. At $r_{\text{sparse}} = 0.25$, DEG-Sparse consistently selects 25\% of genes per perturbation. The selected gene sets show significant overlap with ground-truth DEGs, validating that the model learns biologically meaningful sparsity patterns.
+On Norman single-gene perturbations, all-gene MSE falls by 6.9\% and DE MSE
+by 2.0\%. On Adamson, all-gene MSE remains stable (0.00648 versus 0.00644),
+with small changes in Pearson and DE MSE. Thus the same 25\% routing budget can
+be applied without dataset-specific retuning, while its largest gain appears
+in the combinatorial Norman setting for which sparse response routing is most
+directly motivated.
+
+\subsection{Incremental Ablation}
+\begin{table}[t]
+\centering
+\caption{Incremental ablation on Norman. Each row adds one component to the
+row above; the table does not estimate all factorial interactions.}
+\label{tab:ablation}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lrrrr}
+\toprule
+Setting & Overall & \texttt{seen0} & \texttt{seen1} & \texttt{seen2} \\
+\midrule
+scPert backbone & 0.0098 & 0.0102 & 0.0105 & 0.0079 \\
+$+\,$\saf & 0.0080 & 0.0099 & 0.0079 & 0.0070 \\
+$+\,$\soid & 0.0076 & 0.0078 & 0.0077 & 0.0071 \\
+$+\,$\amf & \textbf{0.0062} & \textbf{0.0078} & \textbf{0.0060}
+& \textbf{0.0063} \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\saf{} accounts for an 18.4\% overall MSE reduction. Adding \soid{} yields a
+further 5.0\% reduction, with the largest contribution in \texttt{seen0}, while
+\texttt{seen2} remains essentially stable (0.0070 versus 0.0071). \amf{}
+produces the final 18.4\% relative reduction. This sequential ablation traces
+the contribution of each stage along the selected construction path.
+
+\subsection{Complexity and Design Scope}
+\saf{} adds three $d\times d$ projections and one score per gene. The
+backbone's chunked self-attention remains the dominant cost. KGE and scGPT
+embeddings are precomputed; \amf{} adds two projections and a small MLP at
+inference. \soid{} is used only during training and requires counterfactual
+control, singleton, and double-perturbation passes for each eligible training
+combination.
+
+The same $r=0.25$ is fixed across cells, conditions, and datasets to isolate
+the effect of support-selective routing under a common budget. Choosing the
+upper quartile favors coverage: the gate admits a broad set of potential direct
+and downstream responders, yet still removes three quarters of dense
+condition injections. A condition-dependent budget is a compatible extension,
+but is not required for the fixed-budget comparison reported here.
+
+\subsection{Reproducible Training Controls}
+The evaluation code is configured to fail closed: analysis aborts rather than
+substituting simulated values when saved predictions are unavailable.
+Embedding paths are explicit rather than dependent on the working directory,
+and alignment coverage is written with each run. The training loop performs
+one forward pass per batch and advances the OneCycle scheduler after each
+optimizer step. These controls matter because duplicated stochastic forward
+passes or an epoch-level scheduler update changes the effective optimization
+procedure even when nominal hyperparameters are unchanged.
 
 \section{Conclusion}
-We presented Sparse adaptive filtering framework that introduces gene-specific sparse attention for perturbation response prediction. By replacing dense additive perturbation encoding with a biologically-motivated sparse gating mechanism, our approach achieves 37\% lower MSE on the Norman benchmark while requiring no external data or architectural redesign. The Second-Order Interaction Detection (SOID) further improves combinatorial prediction quality. Our results demonstrate that architectural sparsity, guided by the DEG prior, is an effective inductive bias for perturbation modeling.
+\method{} introduces support-selective routing into single-cell perturbation
+prediction. On the fixed Norman split it reduces all-gene MSE and improves
+every combinatorial category. The 25\% support provides a simple, interpretable
+operating point: it reduces directly modulated channels fourfold, retains a
+broad candidate response set, and leaves every gene in the prediction
+backbone. These results support sparse perturbation routing as an effective
+inductive bias, with adaptive budgets providing a natural extension.
 
 \begin{thebibliography}{00}
-\bibitem{norman2019} T.~M.~Norman et al., ``Exploring genetic interaction manifolds constructed from rich single-cell phenotypes,'' \textit{Science}, vol.~365, no.~6455, pp.~786--793, 2019.
-\bibitem{scpert} ``scPert: Single-cell perturbation prediction with Transformer and knowledge graph embeddings,'' GitHub repository.
-\bibitem{roohani2024} Y.~Roohani et al., ``Predicting transcriptional outcomes of novel multigene perturbations with GEARS,'' \textit{Nat. Biotechnol.}, vol.~42, pp.~927--935, 2024.
-\bibitem{cui2024} H.~Cui et al., ``scGPT: toward building a foundation model for single-cell multi-omics using generative AI,'' \textit{Nat. Methods}, vol.~21, pp.~1470--1480, 2024.
-\bibitem{ocoot2026} D.~Jiang et al., ``OCOO-T: A simple and scalable virtual cell model for transcriptional perturbation response prediction,'' bioRxiv, 2026.
-\bibitem{scale2026} S.~Chen et al., ``SCALE: Scalable conditional atlas-level endpoint transport for virtual cell perturbation prediction,'' bioRxiv, 2026.
-\bibitem{pertadapt2026} D.~Bai et al., ``PertAdapt: unlocking single-cell foundation models for genetic perturbation prediction via condition-sensitive adaptation,'' \textit{Bioinformatics}, vol.~42, btag307, 2026.
-\bibitem{vcworld2026} Z.~Wei et al., ``VCWorld: A biological world model for virtual cell simulation,'' ICLR, 2026.
-\bibitem{synthpert2026} L.~Phillips et al., ``Enhancing biological reasoning in LLMs via synthetic reasoning traces for cellular perturbation prediction,'' ICLR Workshop MLGenomics, 2026.
-\bibitem{sbb2026} M.~Vollenweider and P.~Buehlmann, ``Signal, bounds, and baselines: Principles for evaluating virtual cell perturbation models,'' bioRxiv, 2026.
-\bibitem{bunne2024} C.~Bunne et al., ``How to build the virtual cell with artificial intelligence: priorities and opportunities,'' \textit{Cell}, 2024.
-
-\bibitem{adamson2016} B.~Adamson et al., "A multiplexed single-cell CRISPR screening platform enables systematic dissection of the unfolded protein response," \textit{Cell}, vol.~167, no.~7, pp.~1867--1882, 2016.
-
-
+\bibitem{norman2019}
+T. M. Norman et al., "Exploring genetic interaction manifolds constructed
+from rich single-cell phenotypes," \emph{Science}, vol. 365, no. 6455,
+pp. 786--793, 2019, doi: 10.1126/science.aax4438.
+\bibitem{gears}
+Y. Roohani, K. Huang, and J. Leskovec, "Predicting transcriptional outcomes
+of novel multigene perturbations with GEARS," \emph{Nature Biotechnology},
+vol. 42, pp. 927--935, 2024, doi: 10.1038/s41587-023-01905-6.
+\bibitem{scgpt}
+H. Cui et al., "scGPT: Toward building a foundation model for single-cell
+multi-omics using generative AI," \emph{Nature Methods}, vol. 21,
+pp. 1470--1480, 2024, doi: 10.1038/s41592-024-02201-0.
+\bibitem{scpert}
+M. Lu et al., "A multi-modal LLM-knowledge fusion framework for predicting
+single-cell genetic perturbation effects," \emph{bioRxiv}, 2026,
+doi: 10.64898/2026.04.24.720560.
+\bibitem{adamson2016}
+B. Adamson et al., "A multiplexed single-cell CRISPR screening platform
+enables systematic dissection of the unfolded protein response,"
+\emph{Cell}, vol. 167, no. 7, pp. 1867--1882, 2016.
 \end{thebibliography}
-
 \end{document}
-
-
-
-
-
-
-

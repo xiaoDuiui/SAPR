@@ -336,8 +336,9 @@ def filter_pert_in_go(condition, pert_names):
 
 
 def loss_fct(pred, y, perts, ctrl=None, direction_lambda=1e-3, dict_filter=None, 
-                      l1_lambda=1e-5, cosine_lambda=0.1, focal_gamma=2, class_weights_indices=None,
-                       model_params=None, deg_calibrated_lambda=0.0, deg_ratio=0.1, interaction_lambda=0.0):
+                       l1_lambda=1e-5, cosine_lambda=0.1, focal_gamma=2, class_weights_indices=None,
+                       model_params=None, deg_calibrated_lambda=0.0, deg_ratio=0.1,
+                       interaction_lambda=0.0, interaction_refs=None):
     """
     Improved Loss function for gene perturbation prediction
     Args:
@@ -422,6 +423,34 @@ def loss_fct(pred, y, perts, ctrl=None, direction_lambda=1e-3, dict_filter=None,
             deg_weights = deg_weights / deg_weights.mean(dim=-1, keepdim=True)
             deg_mse = torch.mean(deg_weights * (pred_p - y_p) ** 2)
             losses = losses + deg_calibrated_lambda * deg_mse
+
+        # Interaction-aware residual weighting.  References are computed only
+        # from the training loader, so this term does not depend on singleton
+        # samples co-occurring in the same mini-batch and does not leak test data.
+        if interaction_lambda > 0 and interaction_refs is not None and '+' in p:
+            genes = [part for part in p.split('+') if part != 'ctrl']
+            if len(genes) == 2:
+                def lookup_single(gene):
+                    for key in (gene + '+ctrl', 'ctrl+' + gene, gene):
+                        if key in interaction_refs:
+                            return interaction_refs[key]
+                    return None
+
+                ref_a = lookup_single(genes[0])
+                ref_b = lookup_single(genes[1])
+                ref_ctrl = interaction_refs.get('ctrl', ctrl)
+                if ref_a is not None and ref_b is not None and ref_ctrl is not None:
+                    additive_ref = ref_a + ref_b - ref_ctrl
+                    if p != 'ctrl' and dict_filter is not None:
+                        additive_ref = additive_ref[retain_idx]
+                    residual = torch.abs(y_p - additive_ref.unsqueeze(0))
+                    residual_weight = 1.0 + residual / (
+                        residual.mean(dim=-1, keepdim=True) + 1e-8)
+                    residual_weight = residual_weight / residual_weight.mean(
+                        dim=-1, keepdim=True)
+                    interaction_mse = torch.mean(
+                        residual_weight.detach() * (pred_p - y_p) ** 2)
+                    losses = losses + interaction_lambda * interaction_mse
 
     # L1 Regularization (if model parameters are provided)
     if model_params is not None and l1_lambda > 0:

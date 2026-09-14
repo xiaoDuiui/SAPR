@@ -5,12 +5,8 @@ import torch.nn.functional as F
 import logging
 
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    filename='./train.log',  
-    filemode='w' 
-)
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
 
 
 class MLP(nn.Module):
@@ -30,11 +26,6 @@ class MLP(nn.Module):
     def forward(self, x):
         return self.network(x)
 
-# ======================================================================
-# DEG-Sparse Cross-Attention: 替代稠密广播 gene_emb + pert_emb_matrix；
-# 每个扰动只激活其 top-k% DEG 基因子集（自适应稀疏图滤波）
-# 启发: SBB (DEG重要性) + PertAdapt (掩码注意力) + OCOO-T (稀疏原理)
-# ======================================================================
 class DEGSparseCrossAttention(nn.Module):
     def __init__(self, hidden_size, sparsity_ratio=0.15):
         super().__init__()
@@ -60,8 +51,48 @@ class DEGSparseCrossAttention(nn.Module):
         sparse_mask = (attn.squeeze(-1) >= threshold).float()
         gate = torch.sigmoid(attn.squeeze(-1)) * sparse_mask
         out = V * gate.unsqueeze(-1)
+        self.last_sparse_mask = sparse_mask.detach()
         out = self.out_proj(out)
         return self.norm(gene_emb + out)
+
+
+class AdaptiveEmbeddingFusion(nn.Module):
+    """Gene-wise fusion of the two embedding sources shipped with this project."""
+
+    def __init__(self, kge_dim=128, scgpt_dim=512, hidden_size=64):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.kge_proj = nn.Linear(kge_dim, hidden_size)
+        self.scgpt_proj = nn.Linear(scgpt_dim, hidden_size)
+        self.attn_net = nn.Sequential(
+            nn.Linear(hidden_size * 2, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, 2)
+        )
+        self.norm = nn.LayerNorm(hidden_size)
+
+    def forward(self, kge, scgpt):
+        squeeze_dims = 0
+        if kge.dim() == 1:
+            kge = kge.unsqueeze(0).unsqueeze(0)
+            scgpt = scgpt.unsqueeze(0).unsqueeze(0)
+            squeeze_dims = 2
+        elif kge.dim() == 2:
+            kge = kge.unsqueeze(0)
+            scgpt = scgpt.unsqueeze(0)
+            squeeze_dims = 1
+
+        h_k = self.kge_proj(kge)
+        h_s = self.scgpt_proj(scgpt)
+        logits = self.attn_net(torch.cat([h_k, h_s], dim=-1))
+        weights = F.softmax(logits, dim=-1)
+        fused = weights[..., 0:1] * h_k + weights[..., 1:2] * h_s
+        fused = self.norm(fused)
+
+        for _ in range(squeeze_dims):
+            fused = fused.squeeze(0)
+            weights = weights.squeeze(0)
+        return fused, weights
 
 class MemoryEfficientMultiheadAttention(nn.Module):
     def __init__(self, d_model, nhead, chunk_size=256):
@@ -143,18 +174,20 @@ class scPert_Model(nn.Module):
         self.embedding_size = args['embedding_size']
         self.device = args['device']
 
-        # Load gene embeddings 
-        gene_data = np.load("./embeddings/gene_2_kge_comgcn_final_common.npz")
+        # Embedding locations are explicit so experiments do not depend on cwd.
+        gene_data = np.load(args['kge_embedding_path'], allow_pickle=True)
         self.loaded_gene_names = gene_data['gene_names']
         self.loaded_embeddings = torch.tensor(gene_data['embeddings'], dtype=torch.float32, device=self.device)
         self.gene_to_index = {gene: idx for idx, gene in enumerate(self.loaded_gene_names)}
 
         # Load pert embeddings
-        pert_data = np.load("./embeddings/gene_embeddingss_full_common.npz")
+        pert_data = np.load(args['scgpt_embedding_path'], allow_pickle=True)
         self.pert_gene_names = pert_data['gene_names']
         self.pert_embeddings = torch.tensor(pert_data['embeddings'], dtype=torch.float32, device=self.device)
         self.pert_to_index = {gene: idx for idx, gene in enumerate(self.pert_gene_names)}
-        self.gene_emb = torch.tensor(np.load(embedding_path), 
+        if embedding_path is None:
+            raise ValueError("embedding_path must point to an aligned [num_genes, 512] array")
+        self.gene_emb = torch.tensor(np.load(embedding_path),
                             dtype=torch.float32, device=self.device)
 
 
@@ -235,14 +268,22 @@ class scPert_Model(nn.Module):
             self.deg_sparse_attn = DEGSparseCrossAttention(
                 hidden_size=self.hidden_size, sparsity_ratio=self.deg_sparse_ratio
             )
-            logging.info("DEG-Sparse Cross-Attention enabled (ratio=" + str(self.deg_sparse_ratio) + ")")
+            logger.info("DEG-Sparse Cross-Attention enabled (ratio=%s)", self.deg_sparse_ratio)
+
+        # Adaptive two-source embedding fusion (KGE + scGPT).
+        self.use_adaptive_fusion = args.get("use_adaptive_fusion", False)
+        if self.use_adaptive_fusion:
+            self.adaptive_fusion = AdaptiveEmbeddingFusion(
+                kge_dim=128, scgpt_dim=512, hidden_size=self.hidden_size
+            )
+            logger.info("AdaptiveEmbeddingFusion enabled (KGE + scGPT)")
 
         self.to(self.device)
 
     def get_random_embedding(self, gene_name):
 
         if gene_name not in self.random_embeddings:
-            logging.info(f"Generating random embedding for {gene_name}")
+            logger.info("Generating random embedding for %s", gene_name)
             torch.manual_seed(hash(gene_name) % (2**32)) 
             self.random_embeddings[gene_name] = torch.randn(640, device=self.device) / np.sqrt(640)
         return self.random_embeddings[gene_name]
@@ -342,8 +383,14 @@ class scPert_Model(nn.Module):
             for pert_name in pert_list:
                 new_pert_emb = self.get_gene_embedding(pert_name)
                 scGPT_pert_emb = self.get_pert_embedding(pert_name)
-                combined_pert_emb = torch.cat([new_pert_emb, scGPT_pert_emb])
-                combined_pert_emb = self.pert_dense(combined_pert_emb)
+                if self.use_adaptive_fusion:
+                    combined_pert_emb, fusion_weights = self.adaptive_fusion(
+                        new_pert_emb, scGPT_pert_emb
+                    )
+                    self.last_fusion_weights = fusion_weights.detach()
+                else:
+                    combined_pert_emb = torch.cat([new_pert_emb, scGPT_pert_emb])
+                    combined_pert_emb = self.pert_dense(combined_pert_emb)
                 pert_embs.append(combined_pert_emb)
 
             if pert_embs:
@@ -368,7 +415,6 @@ class scPert_Model(nn.Module):
             combined_emb = self.deg_sparse_attn(gene_emb, pert_emb_matrix)
         else:
             combined_emb = self.layer_norm1(gene_emb + pert_emb_matrix)
-        combined_emb = self.dropout(combined_emb)
         combined_emb = self.dropout(combined_emb)
 
 

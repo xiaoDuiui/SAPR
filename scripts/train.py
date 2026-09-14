@@ -1,86 +1,163 @@
-import os
+"""Reproducible training entry point for the ICASSP experiments."""
+
+import argparse
+import json
+import random
 import sys
-import torch
+from pathlib import Path
+
 import numpy as np
-sys.path.append(r'./')
-from models import ProcePertdata, scpert
+import torch
 
-device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
-if torch.cuda.is_available():
-    torch.cuda.set_device(device)
-print(f'Using device: {device}')
 
-embedding_dir = './embeddings/'
-data_path = './data'
-embedding_file = 'gene_embeddings_norman_512.npy'
-DataName = 'norman'
-npz_path = './embeddings/gene_embeddingss_full_common.npz'
+REPO_ROOT = Path(__file__).resolve().parents[1]
+WORKSPACE_ROOT = REPO_ROOT.parent
+sys.path.insert(0, str(REPO_ROOT))
 
-print(f'\n===== Processing dataset: {DataName} =====\n')
+from models import ProcePertdata, scpert  # noqa: E402
 
-pertData = ProcePertdata.PertData(data_path)
-pertData.load(DataName=DataName)
-pertData.prepare_split(split='simulation', seed=77)
-pertData.get_dataloader(batch_size=4, test_batch_size=4)
 
-print('Aligning embeddings via Ensembl ID translation...')
-if hasattr(pertData, 'adata'):
-    model_expected_genes = list(pertData.adata.var_names)
-    ensembl_to_symbol = {
-        str(ens_id): str(sym).upper()
-        for ens_id, sym in zip(pertData.adata.var_names, pertData.adata.var['gene_name'])
+VARIANTS = {
+    "baseline": dict(use_deg_sparse=False, interaction_lambda=0.0,
+                     use_adaptive_fusion=False),
+    "saf": dict(use_deg_sparse=True, interaction_lambda=0.0,
+                use_adaptive_fusion=False),
+    "saf_iar": dict(use_deg_sparse=True, interaction_lambda=0.05,
+                    use_adaptive_fusion=False),
+    "saf_amf": dict(use_deg_sparse=True, interaction_lambda=0.0,
+                    use_adaptive_fusion=True),
+    "full": dict(use_deg_sparse=True, interaction_lambda=0.05,
+                 use_adaptive_fusion=True),
+}
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset", default="norman")
+    parser.add_argument("--variant", choices=VARIANTS, default="full")
+    parser.add_argument("--seed", type=int, default=77)
+    parser.add_argument("--epochs", type=int, default=25)
+    parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--sparse-ratio", type=float, default=0.25)
+    parser.add_argument("--data-root", type=Path,
+                        default=WORKSPACE_ROOT / "data")
+    parser.add_argument("--embedding-root", type=Path,
+                        default=WORKSPACE_ROOT / "embeddings")
+    parser.add_argument("--output-root", type=Path,
+                        default=REPO_ROOT / "artifacts" / "experiments")
+    parser.add_argument("--device", default=None)
+    parser.add_argument("--save-model", action="store_true")
+    return parser.parse_args()
+
+
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+def align_scgpt_embeddings(pert_data, source_path, output_path):
+    """Align source symbols to the model gene order; missing genes are zero."""
+    source = np.load(source_path, allow_pickle=True)
+    source_names = [str(name).upper() for name in source["gene_names"]]
+    source_embeddings = source["embeddings"].astype(np.float32)
+    source_index = {name: idx for idx, name in enumerate(source_names)}
+
+    if "gene_name" not in pert_data.adata.var:
+        raise ValueError("adata.var['gene_name'] is required for embedding alignment")
+    symbols = [str(name).upper() for name in pert_data.adata.var["gene_name"]]
+    aligned = np.zeros((len(symbols), source_embeddings.shape[1]), dtype=np.float32)
+    matched = 0
+    for idx, symbol in enumerate(symbols):
+        source_idx = source_index.get(symbol)
+        if source_idx is not None:
+            aligned[idx] = source_embeddings[source_idx]
+            matched += 1
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    np.save(output_path, aligned)
+    return matched, len(symbols)
+
+
+def to_jsonable(value):
+    if isinstance(value, dict):
+        return {str(key): to_jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [to_jsonable(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, (np.floating, np.integer)):
+        return value.item()
+    if torch.is_tensor(value):
+        return value.detach().cpu().tolist()
+    return value
+
+
+def main():
+    args = parse_args()
+    set_seed(args.seed)
+    device = args.device or ("cuda:0" if torch.cuda.is_available() else "cpu")
+    run_dir = args.output_root / args.dataset / args.variant / f"seed_{args.seed}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    pert_data = ProcePertdata.PertData(str(args.data_root))
+    pert_data.load(DataName=args.dataset)
+    pert_data.prepare_split(split="simulation", seed=args.seed)
+    pert_data.get_dataloader(batch_size=args.batch_size,
+                             test_batch_size=args.batch_size)
+
+    scgpt_source = args.embedding_root / "gene_embeddingss_full_common.npz"
+    aligned_path = run_dir / "aligned_scgpt.npy"
+    matched, total = align_scgpt_embeddings(pert_data, scgpt_source, aligned_path)
+    print(f"Aligned scGPT embeddings: {matched}/{total}; missing genes use zero vectors")
+
+    model = scpert.scPert(
+        pert_data,
+        device=device,
+        weight_bias_track=False,
+        proj_name="sapr_icassp",
+        exp_name=f"{args.dataset}_{args.variant}_{args.seed}",
+        embedding_path=str(aligned_path),
+    )
+    variant = VARIANTS[args.variant]
+    model.model_initialize(
+        hidden_size=64,
+        use_deg_sparse=variant["use_deg_sparse"],
+        deg_sparse_ratio=args.sparse_ratio,
+        deg_calibrated_lambda=0.0,
+        interaction_lambda=variant["interaction_lambda"],
+        use_adaptive_fusion=variant["use_adaptive_fusion"],
+        deg_ratio=0.1,
+        kge_embedding_path=str(args.embedding_root /
+                               "gene_2_kge_comgcn_final_common.npz"),
+        scgpt_embedding_path=str(scgpt_source),
+    )
+
+    results = model.train(epochs=args.epochs, lr=args.lr, use_parallel=False)
+    payload = {
+        "dataset": args.dataset,
+        "variant": args.variant,
+        "seed": args.seed,
+        "device": device,
+        "epochs": args.epochs,
+        "batch_size": args.batch_size,
+        "learning_rate": args.lr,
+        "sparse_ratio": args.sparse_ratio,
+        "embedding_coverage": {"matched": matched, "total": total},
+        "results": results,
     }
-else:
-    model_expected_genes = list(pertData.pert_names) if hasattr(pertData, 'pert_names') else []
-    ensembl_to_symbol = {}
+    (run_dir / "metrics.json").write_text(
+        json.dumps(to_jsonable(payload), indent=2), encoding="utf-8")
 
-print(f'Expected Ensembl IDs: {len(model_expected_genes)}')
+    if args.save_model:
+        model.save_model(str(run_dir / "checkpoint"))
+    print(f"Saved metrics to {run_dir / 'metrics.json'}")
 
-raw_data = np.load(npz_path, allow_pickle=True)
-my_gene_names = [str(g).upper() for g in raw_data['gene_names']]
-my_embeddings = raw_data['embeddings']
-gene_to_idx = {name: idx for idx, name in enumerate(my_gene_names)}
 
-aligned = []
-match_count = 0
-dim = my_embeddings.shape[1]
-
-for ens_id in model_expected_genes:
-    sym = ensembl_to_symbol.get(str(ens_id), str(ens_id).upper())
-    if sym in gene_to_idx:
-        aligned.append(my_embeddings[gene_to_idx[sym]])
-        match_count += 1
-    else:
-        aligned.append(np.random.normal(0, 0.1, size=(dim,)))
-
-aligned = np.array(aligned)
-print(f'Aligned: {match_count} / {len(model_expected_genes)}, cold-start: {len(model_expected_genes) - match_count}')
-
-embedding_path = os.path.join(embedding_dir, embedding_file)
-np.save(embedding_path, aligned)
-print(f'Embedding saved: {embedding_path}')
-
-SCPert = scpert.scPert(pertData, device=device,
-                       weight_bias_track=False,
-                       proj_name='pertnet',
-                       exp_name=f'pertnet_{DataName}',
-                       embedding_path=embedding_path)
-
-SCPert.model_initialize(
-    hidden_size=64,
-    use_deg_sparse=True,
-    deg_sparse_ratio=0.25,
-    deg_calibrated_lambda=0.0,
-    interaction_lambda=0.05,
-    deg_ratio=0.1
-)
-
-print('Injecting aligned embeddings...')
-SCPert.model.gene_emb = torch.nn.Parameter(
-    torch.tensor(aligned, dtype=torch.float32).to(device)
-)
-
-SCPert.train(epochs=25, lr=0.001)
-SCPert.save_model(f'{DataName}_model_FINAL')
-print(f'\n===== Completed: {DataName} =====\n')
-print('All done!')
+if __name__ == "__main__":
+    main()
